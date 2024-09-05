@@ -11,7 +11,8 @@ namespace GraphicalDebugging
     {
         public string Name;
         public string Type;
-        public bool IsValid;
+        public string Value;
+        public bool IsValid;        
     }
 
     class Debugger
@@ -194,7 +195,12 @@ namespace GraphicalDebugging
         public Expression GetExpression(string valName)
         {
             var expr = debugger.GetExpression(valName);
-            Expression result = new Expression { IsValid = expr.IsValidValue, Name = expr.Name };
+            Expression result = new Expression
+            {
+                Name = expr.Name,
+                Value = expr.Value,
+                IsValid = expr.IsValidValue
+            };
             if (IsLanguageCpp)
                 result.Type = Util.CppNormalizeType(expr.Type);
             else

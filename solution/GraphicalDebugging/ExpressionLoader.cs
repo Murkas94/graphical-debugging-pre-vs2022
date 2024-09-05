@@ -51,6 +51,14 @@ namespace GraphicalDebugging
             BreakModeEntered?.Invoke();
         }
 
+        private void DebuggerEvents_OnContextChanged(Process NewProcess, Program NewProgram, Thread NewThread, StackFrame NewStackFrame)
+        {
+            if (NewStackFrame != null && this.debugger.IsBreakMode)
+            {
+                BreakModeEntered?.Invoke();
+            }
+        }
+
         public static bool IsBreakMode
         {
             get => Instance.debugger.IsBreakMode;
@@ -73,6 +81,7 @@ namespace GraphicalDebugging
             this.debugger = new Debugger(dte);
             this.debuggerEvents = this.dte.Events.DebuggerEvents;
             this.debuggerEvents.OnEnterBreakMode += DebuggerEvents_OnEnterBreakMode;
+            this.debuggerEvents.OnContextChanged += DebuggerEvents_OnContextChanged;
 
             loadersCpp = new Loaders();
 
@@ -174,6 +183,13 @@ namespace GraphicalDebugging
                 if (!e.IsValid)
                     return false;
             return true;
+        }
+        public static string ErrorFromExpressions(Expression[] exprs)
+        {
+            foreach (Expression e in exprs)
+                if (!e.IsValid)
+                    return e.Value;
+            return "";
         }
 
         public static string TypeFromExpressions(Expression[] exprs)

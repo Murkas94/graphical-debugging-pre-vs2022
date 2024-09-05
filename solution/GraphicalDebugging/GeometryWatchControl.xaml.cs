@@ -7,20 +7,11 @@
 namespace GraphicalDebugging
 {
     using System;
-    using System.Diagnostics.CodeAnalysis;
+    using System.Collections.ObjectModel;
+    using System.Drawing;
     using System.Windows;
     using System.Windows.Controls;
-
-    using System.Drawing;
-    using System.Drawing.Imaging;
-    using System.IO;
     using System.Windows.Media.Imaging;
-
-    using EnvDTE;
-    using Microsoft.VisualStudio.PlatformUI;
-
-    using System.Collections.Generic;
-    using System.Collections.ObjectModel;
 
     /// <summary>
     /// Interaction logic for GeometryWatchControl.
@@ -159,22 +150,19 @@ namespace GraphicalDebugging
 
         private void dataGrid_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
         {
+            if (m_isDataGridEdited)
+                return;
+
             if (e.Key == System.Windows.Input.Key.Delete)
             {
-                if (m_isDataGridEdited)
-                    return;
-
-                Util.RemoveDataGridItems(dataGrid,
-                                         Geometries,
-                                         delegate (int selectIndex) {
-                                             ResetAt(new GeometryItem(), selectIndex);
-                                         },
-                                         delegate (GeometryItem geometry) {
-                                             m_colorIds.Push(geometry.ColorId);
-                                         },
-                                         delegate () {
-                                             UpdateItems(false);
-                                         });
+                Util.RemoveDataGridItems(dataGrid, Geometries,
+                    (int selectIndex) => ResetAt(new GeometryItem(), selectIndex),
+                    (GeometryItem geometry) => m_colorIds.Push(geometry.ColorId),
+                    () => UpdateItems(false));
+            }
+            else if (e.Key == System.Windows.Input.Key.V && e.KeyboardDevice.Modifiers.HasFlag(System.Windows.Input.ModifierKeys.Control))
+            {
+                Util.PasteDataGridItemFromClipboard(dataGrid, Geometries);
             }
         }
 
@@ -265,6 +253,14 @@ namespace GraphicalDebugging
 
                             tryDrawing = true;
                         }
+                        else if (expressions != null)
+                        {
+                            var errorStr = ExpressionLoader.ErrorFromExpressions(expressions);
+                            if (!string.IsNullOrEmpty(errorStr))
+                            {
+                                geometry.Error = errorStr;
+                            }
+                        }
                     }
 
                     // set new row
@@ -343,24 +339,8 @@ namespace GraphicalDebugging
                 image.Source = Util.BitmapToBitmapImage(m_emptyBitmap);
             }
 
-            imageGrid.ContextMenu = new ContextMenu();
-            MenuItem mi = new MenuItem
-            {
-                Header = "Copy"
-            };
-            mi.Click += MenuItem_Copy;
-            if (imageEmpty)
-                mi.IsEnabled = false;
-            imageGrid.ContextMenu.Items.Add(mi);
-            imageGrid.ContextMenu.Items.Add(new Separator());
-            MenuItem mi2 = new MenuItem
-            {
-                Header = "Reset View"
-            };
-            mi2.Click += MenuItem_ResetZoom;
-            if (imageEmpty)
-                mi2.IsEnabled = false;
-            imageGrid.ContextMenu.Items.Add(mi2);
+            imageGridContextMenuCopy.IsEnabled = !imageEmpty;
+            imageGridContextMenuResetZoom.IsEnabled = !imageEmpty;
         }
 
         private void MenuItem_Copy(object sender, RoutedEventArgs e)
@@ -562,6 +542,26 @@ namespace GraphicalDebugging
                     UpdateItems(false); // TODO: pass modified_index?
                 }
             }
+        }
+
+        private void dataGridContextMenuDelete_Click(object sender, RoutedEventArgs e)
+        {
+            Util.RemoveDataGridItems(dataGrid, Geometries,
+                (int selectIndex) => ResetAt(new GeometryItem(), selectIndex),
+                (GeometryItem geometry) => m_colorIds.Push(geometry.ColorId),
+                () => UpdateItems(false));
+        }
+
+        private void dataGridContextMenuEnable_Click(object sender, RoutedEventArgs e)
+        {
+            Util.EnableDataGridItems(dataGrid, Geometries,
+                (GeometryItem geometry) => geometry.IsEnabled = true);
+        }
+
+        private void dataGridContextMenuDisable_Click(object sender, RoutedEventArgs e)
+        {
+            Util.EnableDataGridItems(dataGrid, Geometries,
+                (GeometryItem geometry) => geometry.IsEnabled = false);
         }
     }
 }

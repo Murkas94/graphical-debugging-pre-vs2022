@@ -1,3 +1,15 @@
+version 0.53
+
+bugfixes:
+- fixed handling of debugger context change, e.g. on call stack
+- fixed selection and text edit colors
+- fixed visualization of very small geographic areas
+
+additions:
+- expression error in Type column
+- context menus for row of list of variables
+- support for ctrl+v for row of list of variables
+
 version 0.52
 
 bugfixes:

@@ -23,6 +23,13 @@
               MouseWheel="imageGrid_MouseWheel" >
             <Image x:Name="image" Stretch="Fill" Height="Auto" Width="Auto" />
             <Canvas x:Name="imageCanvas" Height="Auto" Width="Auto" />
+            <Grid.ContextMenu>
+                <ContextMenu x:Name="imageGridContextMenu">
+                    <MenuItem x:Name="imageGridContextMenuCopy" Header="Copy" Click="MenuItem_Copy" />
+                    <Separator />
+                    <MenuItem x:Name="imageGridContextMenuResetZoom" Header="Reset View" Click="MenuItem_ResetZoom" />
+                </ContextMenu>
+            </Grid.ContextMenu>
         </Grid>
         <GridSplitter Grid.Row="1" HorizontalAlignment="Stretch"
                       ResizeDirection="Rows"
@@ -49,6 +56,14 @@
                       BeginningEdit="dataGrid_BeginningEdit"
                       CellEditEnding="dataGrid_CellEditEnding"
                       PreviewMouseLeftButtonDown="dataGrid_PreviewMouseLeftButtonDown">
+                <DataGrid.ContextMenu>
+                    <ContextMenu x:Name="dataGridContextMenu">
+                        <MenuItem x:Name="dataGridContextMenuEnable" Header="Enable" Click="dataGridContextMenuEnable_Click" />
+                        <MenuItem x:Name="dataGridContextMenuDisable" Header="Disable" Click="dataGridContextMenuDisable_Click" />
+                        <Separator />
+                        <MenuItem x:Name="dataGridContextMenuDelete" Header="Delete" Click="dataGridContextMenuDelete_Click" />
+                    </ContextMenu>
+                </DataGrid.ContextMenu>
                 <DataGrid.ColumnHeaderStyle>
                     <Style TargetType="{x:Type DataGridColumnHeader}">
                         <Setter Property="Background" Value="{DynamicResource VsBrush.GridHeadingBackground}" />
@@ -75,14 +90,12 @@
                         <!--Override Highlighting so that its easy to see what is selected even when the control is not focused-->
                         <Style.Triggers>
                             <Trigger Property="IsSelected" Value="True">
-                                <Setter Property="Background" Value="{x:Static SystemColors.HighlightBrush}" />
-                                <Setter Property="Foreground" Value="{x:Static SystemColors.HighlightTextBrush}" />
-                                <Setter Property="BorderBrush" Value="{x:Static SystemColors.HighlightBrush}" />
+                                <Setter Property="Background" Value="{DynamicResource VsBrush.Highlight}" />
+                                <Setter Property="Foreground" Value="{DynamicResource VsBrush.HighlightText}" />
                             </Trigger>
                             <Trigger Property="IsSelected" Value="False">
                                 <Setter Property="Background" Value="{DynamicResource VsBrush.ToolWindowBackground}" />
                                 <Setter Property="Foreground" Value="{DynamicResource VsBrush.ToolWindowText}" />
-                                <Setter Property="BorderBrush" Value="{DynamicResource VsBrush.ToolWindowBorder}" />
                             </Trigger>
                             <MultiDataTrigger>
                                 <MultiDataTrigger.Conditions>
@@ -92,14 +105,21 @@
                                 <MultiDataTrigger.Setters>
                                     <Setter Property="Background" Value="{DynamicResource VsBrush.ToolWindowBackground}" />
                                     <Setter Property="Foreground" Value="{DynamicResource VsBrush.ToolWindowText}" />
-                                    <Setter Property="BorderBrush" Value="{DynamicResource VsBrush.ToolWindowBorder}" />
                                 </MultiDataTrigger.Setters>
                             </MultiDataTrigger>
                         </Style.Triggers>
                     </Style>
                 </DataGrid.CellStyle>
                 <DataGrid.Columns>
-                    <DataGridTextColumn Header="Name"  Binding="{Binding Name}" Width="100" />
+                    <DataGridTextColumn Header="Name"  Binding="{Binding Name}" Width="100">
+                        <DataGridTextColumn.EditingElementStyle>
+                            <Style TargetType="TextBox">
+                                <Setter Property="BorderThickness" Value="0" />
+                                <Setter Property="Background" Value="{DynamicResource VsBrush.ToolWindowBackground}" />
+                                <Setter Property="Foreground" Value="{DynamicResource VsBrush.ToolWindowText}" />
+                            </Style>
+                        </DataGridTextColumn.EditingElementStyle>
+                    </DataGridTextColumn>
                     <DataGridCheckBoxColumn Binding="{Binding IsEnabled, UpdateSourceTrigger=PropertyChanged}"/>
                     <DataGridTemplateColumn Header="Color" Width="50">
                         <DataGridTemplateColumn.CellTemplate>
@@ -115,9 +135,9 @@
                     <DataGridTemplateColumn Header="Type" Width="*" IsReadOnly="True">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <TextBlock Text="{Binding Type}">
+                                <TextBlock Text="{Binding TypeOrError}">
                                     <TextBlock.ToolTip>
-                                        <TextBlock Text="{Binding TypeOrError}" TextWrapping="Wrap">
+                                        <TextBlock Text="{Binding ErrorOrType}" TextWrapping="Wrap">
                                             <TextBlock.Style>
                                                 <Style TargetType="{x:Type TextBlock}">
                                                     <Style.Triggers>
@@ -132,7 +152,7 @@
                                     <TextBlock.Style>
                                         <Style TargetType="{x:Type TextBlock}">
                                             <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsError}" Value="true">
+                                                <DataTrigger Binding="{Binding IsTypeAndError}" Value="true">
                                                     <Setter Property="Foreground" Value="{x:Static Brushes.Red}" />
                                                 </DataTrigger>
                                                 <Trigger Property="Text" Value="{x:Static sys:String.Empty}">

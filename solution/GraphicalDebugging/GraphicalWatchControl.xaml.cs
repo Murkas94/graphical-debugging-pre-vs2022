@@ -6,19 +6,12 @@
 
 namespace GraphicalDebugging
 {
-    using System.Diagnostics.CodeAnalysis;
+    using System;
+    using System.Collections.ObjectModel;
+    using System.Drawing;
     using System.Windows;
     using System.Windows.Controls;
-    using System.Windows.Media.Imaging;
-    using System.Windows.Media;
-    using System.Drawing;
-
-    using EnvDTE;
-    using Microsoft.VisualStudio.PlatformUI;
-
-    using System.Collections.ObjectModel;
-    using System;
-
+    
     /// <summary>
     /// Interaction logic for GraphicalWatchControl.
     /// </summary>
@@ -83,18 +76,19 @@ namespace GraphicalDebugging
 
         private void dataGrid_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
         {
+            if (m_isDataGridEdited)
+                return;
+
             if (e.Key == System.Windows.Input.Key.Delete)
             {
-                if (m_isDataGridEdited)
-                    return;
-
-                Util.RemoveDataGridItems(dataGrid,
-                                         Variables,
-                                         delegate (int selectIndex) {
-                                             ResetAt(new GraphicalItem(), selectIndex);
-                                         },
-                                         delegate (GraphicalItem variable) { },
-                                         delegate () { });
+                Util.RemoveDataGridItems(dataGrid, Variables,
+                    (int selectIndex) => ResetAt(new GraphicalItem(), selectIndex),
+                    (GraphicalItem variable) => { },
+                    () => { });
+            }
+            else if (e.Key == System.Windows.Input.Key.V && e.KeyboardDevice.Modifiers.HasFlag(System.Windows.Input.ModifierKeys.Control))
+            {
+                Util.PasteDataGridItemFromClipboard(dataGrid, Variables);
             }
         }
 
@@ -245,6 +239,14 @@ namespace GraphicalDebugging
 
                         variable.Type = ExpressionLoader.TypeFromExpressions(expressions);
                     }
+                    else
+                    {
+                        var errorStr = ExpressionLoader.ErrorFromExpressions(expressions);
+                        if (!string.IsNullOrEmpty(errorStr))
+                        {
+                            variable.Error = errorStr;
+                        }
+                    }
                 }
             }
 
@@ -269,6 +271,14 @@ namespace GraphicalDebugging
                 int i = dataGrid.Items.IndexOf(v);
                 UpdateItem(false, i);
             }
+        }
+
+        private void dataGridContextMenuDelete_Click(object sender, RoutedEventArgs e)
+        {
+            Util.RemoveDataGridItems(dataGrid, Variables,
+                (int selectIndex) => ResetAt(new GraphicalItem(), selectIndex),
+                (GraphicalItem variable) => { },
+                () => { });
         }
     }
 }
