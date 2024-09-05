@@ -11,6 +11,8 @@ using Microsoft.VisualStudio.Shell;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Runtime.InteropServices.WindowsRuntime;
+using System.Threading.Tasks;
 using System.Globalization;
 using System.Threading;
 
@@ -37,7 +39,7 @@ namespace GraphicalDebugging
             Container = 0, MultiPoint, TurnsContainer, ValuesContainer, GeometriesContainer,
             Point, Segment, Box, NSphere, Ray, Line, Linestring, Ring, Polygon,
             MultiLinestring, MultiPolygon, MultiGeometry, Turn, OtherGeometry,
-            Variant, Image
+            Variant, Image, Value
         };
 
         public delegate void BreakModeEnteredEventHandler();
@@ -110,6 +112,8 @@ namespace GraphicalDebugging
 
             loadersCpp.Add(new StdPairPoint.LoaderCreator());
             loadersCpp.Add(new StdComplexPoint.LoaderCreator());
+
+            loadersCpp.Add(new StdChronoDuration.LoaderCreator());
 
             loadersCpp.Add(new BVariant.LoaderCreator());
 
@@ -231,7 +235,7 @@ namespace GraphicalDebugging
             private readonly Kind mKind;
         }
 
-        public class NonValueKindConstraint : IKindConstraint
+        public class NonValueContainerKindConstraint : IKindConstraint
         {
             public bool Check(Kind kind)
             {
@@ -242,7 +246,11 @@ namespace GraphicalDebugging
 
         public class DrawableKindConstraint : IKindConstraint
         {
-            public bool Check(Kind kind) { return kind != Kind.Container; }
+            public bool Check(Kind kind)
+            {
+                return kind != Kind.Container
+                    && kind != Kind.Value;
+            }
         }
 
         // IMPORTANT: GeometriesContainer cannot be a Geometry,
@@ -254,7 +262,8 @@ namespace GraphicalDebugging
                 return kind != Kind.Container
                     && kind != Kind.ValuesContainer
                     && kind != Kind.GeometriesContainer
-                    && kind != Kind.Image;
+                    && kind != Kind.Image
+                    && kind != Kind.Value;
             }
         }
 
@@ -264,7 +273,8 @@ namespace GraphicalDebugging
             {
                 return kind != Kind.Container
                     && kind != Kind.ValuesContainer
-                    && kind != Kind.Image;
+                    && kind != Kind.Image
+                    && kind != Kind.Value;
             }
         }
 
@@ -284,7 +294,7 @@ namespace GraphicalDebugging
         public static KindConstraint OnlyValuesContainers { get; } = new KindConstraint(Kind.ValuesContainer);
         public static KindConstraint OnlyMultiPoints { get; } = new KindConstraint(Kind.MultiPoint);
         public static IndexableKindConstraint OnlyIndexables { get; } = new IndexableKindConstraint();
-        public static NonValueKindConstraint OnlyNonValues { get; } = new NonValueKindConstraint();
+        public static NonValueContainerKindConstraint OnlyNonValueContainers { get; } = new NonValueContainerKindConstraint();
 
         /// <summary>
         /// Loads debugged variable into ExpressionDrawer.IDrawable and additional
@@ -764,7 +774,20 @@ namespace GraphicalDebugging
         }
 
         abstract class NSphereLoader : GeometryLoader<ExpressionDrawer.NSphere>
-        { }
+        {
+            public override ExpressionDrawer.IDrawable DrawableFromMemory(MemoryReader.Converter<double> converter,
+                                                                          double[] values, int offset)
+            {
+                int valCount = converter.ValueCount();
+                if (valCount == 3)
+                {
+                    var c = new ExpressionDrawer.Point(values[offset], values[offset + 1]);
+                    var r = values[offset + 2];
+                    return new ExpressionDrawer.NSphere(c, r);
+                }
+                return null;
+            }
+        }
 
         abstract class RangeLoader<ResultType> : GeometryLoader<ResultType>
             where ResultType : ExpressionDrawer.IDrawable
@@ -1158,22 +1181,35 @@ namespace GraphicalDebugging
                         return null;
 
                     string m_center = name + ".m_center";
+                    string m_radius = name + ".m_radius";
 
                     string pointType = tparams[0];
                     PointLoader pointLoader = loaders.FindByType(ExpressionLoader.Kind.Point,
                                                                  m_center,
                                                                  pointType) as PointLoader;
-                    if (pointLoader == null)
-                        return null;
 
-                    return new BGNSphere(pointLoader, pointType);
+                    string radiusType = tparams[1];
+                    
+                    return pointLoader != null
+                        && debugger.GetTypeSizeof(type, out int sizeOf)
+                        && debugger.GetAddressOffset(name, m_center, out long centerDiff)
+                        && debugger.GetAddressOffset(name, m_radius, out long radiusDiff)
+                        && debugger.GetCppSizeof(radiusType, out int radiusSize)
+                        && !Debugger.IsInvalidOffset(sizeOf, centerDiff, radiusDiff)
+                         ? new BGNSphere(pointLoader, pointType, radiusType, radiusSize, sizeOf, centerDiff, radiusDiff)
+                         : null;
                 }
             }
 
-            private BGNSphere(PointLoader pointLoader, string pointType)
+            private BGNSphere(PointLoader pointLoader, string pointType, string radiusType, int radiusSize, int sizeOf, long centerDiff, long radiusDiff)
             {
                 this.pointLoader = pointLoader;
                 this.pointType = pointType;
+                this.radiusType = radiusType;
+                this.radiusSize = radiusSize;
+                this.sizeOf = sizeOf;
+                this.centerDiff = centerDiff;
+                this.radiusDiff = radiusDiff;
             }
 
             public override Geometry.Traits GetTraits(MemoryReader mreader, Debugger debugger,
@@ -1189,9 +1225,7 @@ namespace GraphicalDebugging
                 string m_center = name + ".m_center";
                 string m_radius = name + ".m_radius";
 
-                Geometry.Point center = pointLoader.LoadPoint(mreader, debugger,
-                                                              m_center, pointType);
-
+                Geometry.Point center = pointLoader.LoadPoint(mreader, debugger, m_center, pointType);
                 bool ok = debugger.TryLoadDouble(m_radius, out double radius);
 
                 return Util.IsOk(center, ok)
@@ -1199,8 +1233,34 @@ namespace GraphicalDebugging
                      : null;
             }
 
+            public override MemoryReader.Converter<double> GetMemoryConverter(MemoryReader mreader,
+                                                                              Debugger debugger, // TODO - remove
+                                                                              string name, string type)
+            {
+                // NOTE: In case it was created by derived class and these members set to invalid values
+                if (sizeOf <= 0
+                 || Debugger.IsInvalidOffset(sizeOf, centerDiff, radiusDiff))
+                    return null;
+
+                string m_center = name + ".m_center";
+                MemoryReader.Converter<double> pointConverter = pointLoader.GetMemoryConverter(mreader, debugger, m_center, pointType);
+                if (pointConverter == null)
+                    return null;
+
+                MemoryReader.Converter<double> radiusConverter = mreader.GetNumericConverter(radiusType, radiusSize);
+
+                return new MemoryReader.StructConverter<double>(sizeOf,
+                            new MemoryReader.Member<double>(pointConverter, (int)centerDiff),
+                            new MemoryReader.Member<double>(radiusConverter, (int)radiusDiff));
+            }
+
             private readonly PointLoader pointLoader;
             private readonly string pointType;
+            private readonly string radiusType;
+            private readonly int radiusSize;
+            private readonly long centerDiff;
+            private readonly long radiusDiff;
+            private readonly int sizeOf;
         }
 
         abstract class PointRange<ResultType> : RangeLoader<ResultType>
@@ -3130,6 +3190,70 @@ namespace GraphicalDebugging
             readonly string pointType;
         }
 
+        // TODO: Add abstract class and derive from it here
+        // TODO: Add user-defined Calue in ExpressionLoader_UserDefined
+        class Value : Loader
+        {
+            public Value(string memberName, string memberType)
+            {
+                this.memberName = memberName;
+                this.memberType = memberType;
+            }
+
+            public double Load(MemoryReader mreader, Debugger debugger, string name, string type)
+            {
+                // TODO: what if the actual value is NaN?
+                return debugger.TryLoadDouble(name + "." + memberName, out double result)
+                     ? result
+                     : double.NaN;
+            }
+
+            public MemoryReader.Converter<double> GetMemoryConverter(MemoryReader mreader,
+                                                                     Debugger debugger, // TODO - remove
+                                                                     string name,
+                                                                     string type)
+            {
+                string member = name + "." + memberName;
+                if (!debugger.GetAddressOffset(name, member, out long memberOffset)
+                 || !debugger.GetTypeSizeof(member, out int memberSize))
+                    return null;
+                MemoryReader.ValueConverter<double> memberConverter = mreader.GetNumericConverter(memberType, memberSize);
+                return memberConverter != null
+                    && debugger.GetTypeSizeof(type, out int sizeOfValue)
+                    && !Debugger.IsInvalidOffset(sizeOfValue, memberOffset)
+                     ? new MemoryReader.StructConverter<double>(
+                            sizeOfValue,
+                            new MemoryReader.Member<double>(memberConverter, (int)memberOffset))
+                     : null;
+            }
+
+            private readonly string memberName;
+            private readonly string memberType;
+        }
+
+        class StdChronoDuration : Value
+        {
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
+            {
+                public bool IsUserDefined() { return false; }
+                public Kind Kind() { return ExpressionLoader.Kind.Value; }
+                public Loader Create(Loaders loaders, Debugger debugger, string name, string type, string id)
+                {
+                    if (id != "std::chrono::duration")
+                        return null;
+
+                    List<string> tparams = Util.Tparams(type);
+                    if (tparams.Count < 1)
+                        return null;
+
+                    return new StdChronoDuration("_MyRep", tparams[0]);
+                }
+            }
+
+            private StdChronoDuration(string memberName, string memberType) : base(memberName, memberType)
+            {}
+        }
+
         class ValuesContainer : LoaderR<ExpressionDrawer.ValuesContainer>
         {
             public class LoaderCreator : ExpressionLoader.ILoaderCreator
@@ -3151,17 +3275,19 @@ namespace GraphicalDebugging
                     containerLoader.ElementInfo(name, type, out string elName, out string elType);
 
                     // WARNING: Potentially recursive call, avoid searching for ValuesContainers
-                    Loader l = loaders.FindByType(OnlyNonValues, elName, elType);
+                    Loader l = loaders.FindByType(OnlyNonValueContainers, elName, elType);
 
-                    return l == null // this is not non-value
-                         ? new ValuesContainer(containerLoader)
+                    return l == null ? new ValuesContainer(containerLoader, null, elType)
+                         : l is Value ? new ValuesContainer(containerLoader, l as Value, elType)
                          : null;
                 }
             }
 
-            private ValuesContainer(ContainerLoader containerLoader)
+            private ValuesContainer(ContainerLoader containerLoader, Value valueLoader, string valueType)
             {
                 this.containerLoader = containerLoader;
+                this.valueLoader = valueLoader;
+                this.valueType = valueType;
             }
 
             public override Geometry.Traits GetTraits(MemoryReader mreader, Debugger debugger,
@@ -3188,34 +3314,38 @@ namespace GraphicalDebugging
                 List<double> result = null;
 
                 if (mreader != null)
-                    LoadMemory(mreader, debugger, name, type, containerLoader, out result, callback);
+                    LoadMemory(mreader, debugger, name, type, out result, callback);
 
                 if (result == null)
-                    LoadParsed(debugger, name, containerLoader, out result, callback);
+                    LoadParsed(mreader, debugger, name, type, out result, callback);
 
                 return result;
             }
 
             private void LoadMemory(MemoryReader mreader, Debugger debugger,
                                     string name, string type,
-                                    ContainerLoader loader,
                                     out List<double> result,
                                     LoadCallback callback)
             {
                 result = null;
 
-                loader.ElementInfo(name, type, out string elemName, out string elemType);
+                containerLoader.ElementInfo(name, type, out string elemName, out string elemType);
 
                 if (!debugger.GetTypeSizeof(elemType, out int valSize))
                     return;
 
-                MemoryReader.ValueConverter<double>
+                MemoryReader.Converter<double> valueConverter = null;
+
+                if (valueLoader != null)
+                    valueConverter = valueLoader.GetMemoryConverter(mreader, debugger, elemName, elemType);
+                else
                     valueConverter = mreader.GetNumericConverter(elemType, valSize);
+
                 if (valueConverter == null)
                     return;
 
                 List<double> list = new List<double>();
-                bool ok = loader.ForEachMemoryBlock(mreader, debugger, name, type, 0, valueConverter,
+                bool ok = containerLoader.ForEachMemoryBlock(mreader, debugger, name, type, 0, valueConverter,
                     delegate (double[] values)
                     {
                         foreach (double v in values)
@@ -3227,17 +3357,28 @@ namespace GraphicalDebugging
                     result = list;
             }
 
-            private void LoadParsed(Debugger debugger, string name,
-                                    ContainerLoader loader,
+            private void LoadParsed(MemoryReader mreader, Debugger debugger,
+                                    string name, string type,
                                     out List<double> result,
                                     LoadCallback callback)
             {                
                 result = null;
                 List<double> values = new List<double>();
-                bool ok = loader.ForEachElement(debugger, name, delegate (string elName)
+                bool ok = containerLoader.ForEachElement(debugger, name, delegate (string elName)
                 {
-                    if (!debugger.TryLoadDouble(elName, out double value))
-                        return false;
+                    double value = double.NaN;
+                    if (valueLoader != null)
+                    {
+                        // TODO: what if the actual value is NaN?
+                        value = valueLoader.Load(mreader, debugger, elName, valueType);
+                        if (double.IsNaN(value))
+                            return false;
+                    }
+                    else // no value loader found, assume it's built-in numeric type
+                    {
+                        if (!debugger.TryLoadDouble(elName, out value))
+                            return false;
+                    }
                     values.Add(value);
                     return callback();
                 });
@@ -3247,6 +3388,8 @@ namespace GraphicalDebugging
             }
 
             readonly ContainerLoader containerLoader;
+            readonly Value valueLoader;
+            readonly string valueType;
         }
 
         // This loader is created manually right now so LoaderCreator is not needed
