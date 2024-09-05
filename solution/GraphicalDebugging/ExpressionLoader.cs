@@ -51,7 +51,7 @@ namespace GraphicalDebugging
             BreakModeEntered?.Invoke();
         }
 
-        private void DebuggerEvents_OnContextChanged(Process NewProcess, Program NewProgram, Thread NewThread, StackFrame NewStackFrame)
+        private void DebuggerEvents_OnContextChanged(Process NewProcess, Program NewProgram, EnvDTE.Thread NewThread, StackFrame NewStackFrame)
         {
             if (NewStackFrame != null && this.debugger.IsBreakMode)
             {
