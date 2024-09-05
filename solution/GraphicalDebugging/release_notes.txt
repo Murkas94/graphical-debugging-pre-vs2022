@@ -1,3 +1,11 @@
+version 0.55
+
+additions:
+- add handling of C++ types decorated with module name
+bugfixes:
+- fixed cancelling of loading taking too much time
+- fixed loading of user-defined point-based boxes, segments and rays
+
 version 0.54
 
 bugfixes:
