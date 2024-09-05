@@ -9,8 +9,10 @@ using EnvDTE80;
 using Microsoft.VisualStudio.Shell;
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
-using System.Threading.Tasks;
+using System.Globalization;
+using System.Threading;
 
 namespace GraphicalDebugging
 {
@@ -55,13 +57,11 @@ namespace GraphicalDebugging
         }
 
         private static ExpressionLoader Instance { get; set; }
-
-        public static async Task InitializeAsync(GraphicalDebuggingPackage package)
+        
+        public static void Initialize(GraphicalDebuggingPackage package)
         {
-            DTE2 dte = await package.GetServiceAsync(typeof(DTE)) as DTE2;
-
-            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(package.DisposalToken);
-
+            DTE2 dte = package.GetService(typeof(DTE)) as DTE2;
+            
             Instance = new ExpressionLoader(dte);
         }
 

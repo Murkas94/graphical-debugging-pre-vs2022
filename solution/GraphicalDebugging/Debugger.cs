@@ -1,5 +1,8 @@
 ﻿using EnvDTE;
-using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Debugger.ComponentInterfaces;
+using System;
+using System.Windows.Forms;
+using static GraphicalDebugging.MemoryReader;
 
 namespace GraphicalDebugging
 {

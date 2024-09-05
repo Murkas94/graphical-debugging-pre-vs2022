@@ -19,7 +19,9 @@ using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-
+using System.Threading;
+using Task = System.Threading.Tasks.Task;
+using Microsoft.VisualStudio.OLE.Interop;
 
 namespace GraphicalDebugging
 {
@@ -238,11 +240,9 @@ namespace GraphicalDebugging
                  : "";
         }
 
-        public static void ShowWindow<WatchWindow>(AsyncPackage package, string name)
+        public static void ShowWindow<WatchWindow>(Package package, string name)
             where WatchWindow : ToolWindowPane
         {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
             for (int i = 0; i < 10; ++i)
             {
                 ToolWindowPane window = package.FindToolWindow(typeof(WatchWindow), i, false);

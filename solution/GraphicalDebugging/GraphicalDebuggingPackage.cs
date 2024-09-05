@@ -30,7 +30,7 @@ namespace GraphicalDebugging
     /// To get loaded into VS, the package must be referred by &lt;Asset Type="Microsoft.VisualStudio.VsPackage" ...&gt; in .vsixmanifest file.
     /// </para>
     /// </remarks>
-    [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
+    [PackageRegistration(UseManagedResourcesOnly = true)]
     [InstalledProductRegistration("#110", "#112", "1.0", IconResourceID = 400)] // Info on this package for Help/About
     [ProvideMenuResource("Menus.ctmenu", 1)]
     [Guid(GraphicalDebuggingPackage.PackageGuidString)]
@@ -41,7 +41,7 @@ namespace GraphicalDebugging
     [ProvideOptionPage(typeof(GeometryWatchOptionPage), "Graphical Debugging", "Geometry Watch", 0, 0, true)]
     [ProvideOptionPage(typeof(GraphicalWatchOptionPage), "Graphical Debugging", "Graphical Watch", 0, 0, true)]
     [ProvideOptionPage(typeof(PlotWatchOptionPage), "Graphical Debugging", "Plot Watch", 0, 0, true)]
-    public sealed class GraphicalDebuggingPackage : AsyncPackage
+    public sealed class GraphicalDebuggingPackage : Package
     {
         /// <summary>
         /// GraphicalDebuggingPackage GUID string.
@@ -70,19 +70,22 @@ namespace GraphicalDebugging
         /// Initialization of the package; this method is called right after the package is sited, so this is the place
         /// where you can put all the initialization code that rely on services provided by VisualStudio.
         /// </summary>
-        protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
+        protected override void Initialize()
         {
-            // When initialized asynchronously, the current thread may be a background thread at this point.
-            // Do any initialization that requires the UI thread after switching to the UI thread.
-            await this.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-
             Instance = this;
 
-            await ExpressionLoader.InitializeAsync(this);
+            base.Initialize();
 
-            await GeometryWatchCommand.InitializeAsync(this);
-            await GraphicalWatchCommand.InitializeAsync(this);
-            await PlotWatchCommand.InitializeAsync(this);
+            ExpressionLoader.Initialize(this);
+
+            GeometryWatchCommand.Initialize(this);
+            GraphicalWatchCommand.Initialize(this);
+            PlotWatchCommand.Initialize(this);
+        }
+
+        public new object GetService(Type serviceType)
+        {
+            return base.GetService(serviceType);
         }
 
         public new DialogPage GetDialogPage(Type dialogPageType)
