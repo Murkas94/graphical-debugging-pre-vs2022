@@ -59,7 +59,7 @@ namespace GraphicalDebugging
             where ValueType : struct
             where T : struct
         {
-            private static int sizeOfT = Marshal.SizeOf(default(T));
+            private static readonly int sizeOfT = Marshal.SizeOf(default(T));
             
             public override int ByteSize() { return sizeOfT; }
 
@@ -212,7 +212,7 @@ namespace GraphicalDebugging
                 }
             }
 
-            Member<ValueType>[] members = null;
+            readonly Member<ValueType>[] members = null;
             int byteSize = 0;
 
             int internalValueCount = 0;
@@ -246,8 +246,8 @@ namespace GraphicalDebugging
                 transformer(result, resultOffset);
             }
 
-            Converter<ValueType> baseConverter;
-            Transformer transformer;
+            readonly Converter<ValueType> baseConverter;
+            readonly Transformer transformer;
         }
 
         private bool IsSignedIntegralType(string valType)
@@ -478,9 +478,8 @@ namespace GraphicalDebugging
 
         public MemoryReader(Debugger debugger)
         {
-            string language = debugger.CurrentStackFrame.Language;
-            this.language = language == "C#" ? Language.CS
-                          : language == "Basic" ? Language.Basic
+            this.language = debugger.IsLanguageCs ? Language.CS
+                          : debugger.IsLanguageBasic ? Language.Basic
                           : Language.Cpp;
 
             this.process = GetDebuggedProcess(debugger);
@@ -523,7 +522,7 @@ namespace GraphicalDebugging
             {
                 foreach (DkmProcess proc in procs)
                 {
-                    if (proc.Path == debugger.CurrentProcess.Name)
+                    if (proc.Path == debugger.CurrentProcessName)
                         return proc;
                 }
             }
@@ -532,7 +531,7 @@ namespace GraphicalDebugging
 
         enum Language { Cpp, CS, Basic };
 
-        Language language;
-        DkmProcess process;
+        readonly Language language;
+        readonly DkmProcess process;
     }
 }

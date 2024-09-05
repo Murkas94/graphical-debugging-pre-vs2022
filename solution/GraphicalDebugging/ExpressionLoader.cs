@@ -9,24 +9,22 @@ using EnvDTE80;
 using Microsoft.VisualStudio.Shell;
 
 using System;
-using System.Collections;
 using System.Collections.Generic;
-using System.Globalization;
-using System.Threading;
+using System.Threading.Tasks;
 
 namespace GraphicalDebugging
 {
     partial class ExpressionLoader
     {
-        private DTE2 dte;
-        private Debugger debugger;
-        private DebuggerEvents debuggerEvents; // debuggerEvents member is needed for the events to fire properly
-        private Loaders loadersCpp;
-        private Loaders loadersCS;
-        private Loaders loadersBasic;
-        private LoadersCache loadersCacheCpp;
-        private LoadersCache loadersCacheCS;
-        private LoadersCache loadersCacheBasic;
+        private readonly DTE2 dte;
+        private readonly Debugger debugger;
+        private readonly DebuggerEvents debuggerEvents; // debuggerEvents member is needed for the events to fire properly
+        private readonly Loaders loadersCpp;
+        private readonly Loaders loadersCS;
+        private readonly Loaders loadersBasic;
+        private readonly LoadersCache loadersCacheCpp;
+        private readonly LoadersCache loadersCacheCS;
+        private readonly LoadersCache loadersCacheBasic;
 
         // TODO: It's not clear what to do with Variant
         // At the initial stage it's not known what is stored in Variant
@@ -53,19 +51,17 @@ namespace GraphicalDebugging
 
         public static bool IsBreakMode
         {
-            get { return Debugger.CurrentMode == dbgDebugMode.dbgBreakMode; }
+            get => Instance.debugger.IsBreakMode;
         }
 
         private static ExpressionLoader Instance { get; set; }
-        private static Debugger Debugger
+
+        public static async Task InitializeAsync(GraphicalDebuggingPackage package)
         {
-            get { return Instance.debugger; }
-        }
-        
-        public static void Initialize(GraphicalWatchPackage package)
-        {
-            DTE2 dte = package.GetService(typeof(DTE)) as DTE2;
-            
+            DTE2 dte = await package.GetServiceAsync(typeof(DTE)) as DTE2;
+
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(package.DisposalToken);
+
             Instance = new ExpressionLoader(dte);
         }
 
@@ -74,7 +70,7 @@ namespace GraphicalDebugging
             ThreadHelper.ThrowIfNotOnUIThread();
 
             this.dte = dte;
-            this.debugger = new Wrappers.DebuggerWrapper(dte.Debugger);
+            this.debugger = new Debugger(dte);
             this.debuggerEvents = this.dte.Events.DebuggerEvents;
             this.debuggerEvents.OnEnterBreakMode += DebuggerEvents_OnEnterBreakMode;
 
@@ -158,15 +154,15 @@ namespace GraphicalDebugging
 
         public static Expression[] GetExpressions(string name, char separator = ';')
         {
-            var expr = Debugger.GetExpression(name);
-            if (expr.IsValidValue)
+            var expr = Instance.debugger.GetExpression(name);
+            if (expr.IsValid)
                 return new Expression[] { expr };
 
             string[] subnames = name.Split(separator);
             Expression[] exprs = new Expression[subnames.Length];
             for (int i = 0; i < subnames.Length; ++i)
             {
-                exprs[i] = Debugger.GetExpression(subnames[i]);
+                exprs[i] = Instance.debugger.GetExpression(subnames[i]);
             }
 
             return exprs;
@@ -175,17 +171,9 @@ namespace GraphicalDebugging
         public static bool AllValidValues(Expression[] exprs)
         {
             foreach(Expression e in exprs)
-                if (!e.IsValidValue)
+                if (!e.IsValid)
                     return false;
             return true;
-        }
-
-        public static bool AnyValidValue(Expression[] exprs)
-        {
-            foreach (Expression e in exprs)
-                if (e.IsValidValue)
-                    return true;
-            return false;
         }
 
         public static string TypeFromExpressions(Expression[] exprs)
@@ -224,7 +212,7 @@ namespace GraphicalDebugging
 
             public Kind Kind { get { return mKind; } }
 
-            Kind mKind;
+            private readonly Kind mKind;
         }
 
         public class NonValueKindConstraint : IKindConstraint
@@ -321,10 +309,9 @@ namespace GraphicalDebugging
             if (exprs.Length < 1 || ! AllValidValues(exprs))
                 return;
 
-            string language = Instance.debugger.CurrentStackFrame.Language;
-            Loaders loaders = language == "C++" ? Instance.loadersCpp
-                            : language == "C#" ? Instance.loadersCS
-                            : language == "Basic" ? Instance.loadersBasic
+            Loaders loaders = Instance.debugger.IsLanguageCpp ? Instance.loadersCpp
+                            : Instance.debugger.IsLanguageCs ? Instance.loadersCS
+                            : Instance.debugger.IsLanguageBasic ? Instance.loadersBasic
                             : null;
 
             if (loaders == null)
@@ -396,8 +383,7 @@ namespace GraphicalDebugging
 
             public void Add(string type, Kind kind, Loader loader)
             {
-                List<Entry> list;
-                if (!dict.TryGetValue(type, out list))
+                if (!dict.TryGetValue(type, out List<Entry> list))
                 {
                     list = new List<Entry>();
                     dict.Add(type, list);
@@ -409,8 +395,7 @@ namespace GraphicalDebugging
 
             public Loader Find(string type, IKindConstraint kindConstraint)
             {
-                List<Entry> list;
-                if (dict.TryGetValue(type, out list))
+                if (dict.TryGetValue(type, out List<Entry> list))
                 {
                     foreach (Entry e in list)
                     {
@@ -426,7 +411,7 @@ namespace GraphicalDebugging
                 dict.Clear();
             }
 
-            private Dictionary<string, List<Entry>> dict;
+            private readonly Dictionary<string, List<Entry>> dict;
         }
 
         /// <summary>
@@ -435,16 +420,16 @@ namespace GraphicalDebugging
         /// </summary>
         class Loaders
         {
-            static int KindsCount = Enum.GetValues(typeof(Kind)).Length;
+            static readonly int KindsCount = Enum.GetValues(typeof(Kind)).Length;
 
             public Loaders()
             {
-                lists = new List<LoaderCreator>[KindsCount];
+                lists = new List<ILoaderCreator>[KindsCount];
                 for (int i = 0; i < KindsCount; ++i)
-                    lists[i] = new List<LoaderCreator>();
+                    lists[i] = new List<ILoaderCreator>();
             }
 
-            public void Add(LoaderCreator loaderCreator)
+            public void Add(ILoaderCreator loaderCreator)
             {
                 int i = (int)loaderCreator.Kind();
                 System.Diagnostics.Debug.Assert(0 <= i && i < KindsCount);
@@ -473,13 +458,12 @@ namespace GraphicalDebugging
             public Loader FindByType(IKindConstraint kindConstraint, string name, string type)
             {
                 // Check if a Loader is cached for this type
-                string language = Instance.debugger.CurrentStackFrame.Language;
-                var loadersCache = language == "C++" ? Instance.loadersCacheCpp
-                                 : language == "C#" ? Instance.loadersCacheCS
-                                 : language == "Basic" ? Instance.loadersCacheBasic
+                var loadersCache = Instance.debugger.IsLanguageCpp ? Instance.loadersCacheCpp
+                                 : Instance.debugger.IsLanguageCs ? Instance.loadersCacheCS
+                                 : Instance.debugger.IsLanguageBasic ? Instance.loadersCacheBasic
                                  : null;
 
-                if (language == "C++")
+                if (Instance.debugger.IsLanguageCpp)
                 {
                     type = Util.CppRemoveCVRef(type);
                 }
@@ -500,13 +484,12 @@ namespace GraphicalDebugging
                     // Single kind required, check only one list
                     Kind kind = (kindConstraint as KindConstraint).Kind;
                     int kindIndex = (int)kind;
-                    foreach (LoaderCreator creator in lists[kindIndex])
+                    foreach (ILoaderCreator creator in lists[kindIndex])
                     {
-                        Loader loader = creator.Create(this, Debugger, name, type, id);
+                        Loader loader = creator.Create(this, Instance.debugger, name, type, id);
                         if (loader != null)
                         {
-                            if (loadersCache != null)
-                                loadersCache.Add(type, kind, loader);
+                            loadersCache?.Add(type, kind, loader);
                             return loader;
                         }
                     }
@@ -519,13 +502,12 @@ namespace GraphicalDebugging
                         Kind kind = (Kind)i;
                         if (kindConstraint.Check(kind))
                         {
-                            foreach (LoaderCreator creator in lists[i])
+                            foreach (ILoaderCreator creator in lists[i])
                             {
-                                Loader loader = creator.Create(this, Debugger, name, type, id);
+                                Loader loader = creator.Create(this, Instance.debugger, name, type, id);
                                 if (loader != null)
                                 {
-                                    if (loadersCache != null)
-                                        loadersCache.Add(type, kind, loader);
+                                    loadersCache?.Add(type, kind, loader);
                                     return loader;
                                 }
                             }
@@ -537,22 +519,21 @@ namespace GraphicalDebugging
 
             public void RemoveUserDefined()
             {
-                foreach (List<LoaderCreator> li in lists)
+                foreach (List<ILoaderCreator> li in lists)
                 {
-                    List<LoaderCreator> removeList = new List<LoaderCreator>();
                     for (int i = li.Count - 1; i >= 0; --i)
                         if (li[i].IsUserDefined())
                             li.RemoveAt(i);
                 }                
             }
 
-            List<LoaderCreator>[] lists;
+            private readonly List<ILoaderCreator>[] lists;
         }
 
         /// <summary>
         /// The interface of a loader creator.
         /// </summary>
-        interface LoaderCreator
+        interface ILoaderCreator
         {
             /// <summary>
             /// Returns true for user-defined Loaders which has to be reloaded
@@ -800,9 +781,9 @@ namespace GraphicalDebugging
                 double x = 0, y = 0;
                 string ptrName = name + memberArraySuffix;
                 if (count >= 1)
-                    okx = ExpressionParser.TryLoadDouble(debugger, ptrName + "[0]", out x);
+                    okx = debugger.TryLoadDouble(ptrName + "[0]", out x);
                 if (count >= 2)
-                    oky = ExpressionParser.TryLoadDouble(debugger, ptrName + "[1]", out y);
+                    oky = debugger.TryLoadDouble(ptrName + "[1]", out y);
                 return Util.IsOk(okx, oky)
                      ? new ExpressionDrawer.Point(x, y)
                      : null;
@@ -837,30 +818,28 @@ namespace GraphicalDebugging
                 // TODO: byteSize and byteOffset could be created in LoaderCreator
                 string ptrName = name + memberArraySuffix;
                 string elemName = ptrName + "[0]";
-                int elemSize = ExpressionParser.GetTypeSizeof(debugger, coordType);
+                if (!debugger.GetTypeSizeof(coordType, out int elemSize))
+                    return null;
                 MemoryReader.Converter<double> arrayConverter
                     = mreader.GetNumericArrayConverter(coordType, elemSize, count);
-                if (arrayConverter == null)
-                    return null;
-                int byteSize = ExpressionParser.GetValueSizeof(debugger, name);
-                if (byteSize == 0)
-                    return null;
-                long byteOffset = ExpressionParser.GetAddressDifference(debugger, name, elemName);
-                if (ExpressionParser.IsInvalidOffset(byteSize, byteOffset))
-                    return null;
-                return new MemoryReader.StructConverter<double>(byteSize,
-                            new MemoryReader.Member<double>(arrayConverter, (int)byteOffset));
+                return arrayConverter != null
+                    && debugger.GetValueSizeof(name, out int byteSize)
+                    && debugger.GetAddressOffset(name, elemName, out long byteOffset)
+                    && !Debugger.IsInvalidOffset(byteSize, byteOffset)
+                     ? new MemoryReader.StructConverter<double>(byteSize,
+                            new MemoryReader.Member<double>(arrayConverter, (int)byteOffset))
+                     : null;
             }
 
-            string memberArraySuffix;
-            string coordType;
-            Geometry.Traits traits;
-            int count;
+            private readonly string memberArraySuffix;
+            private readonly string coordType;
+            private readonly Geometry.Traits traits;
+            private readonly int count;
         }
 
         class BGPoint : BXPoint
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.Point; }
@@ -875,9 +854,7 @@ namespace GraphicalDebugging
 
                     string coordType = tparams[0];
                     int dimension = int.Parse(tparams[1]);
-                    Geometry.CoordinateSystem cs = Geometry.CoordinateSystem.Cartesian;
-                    Geometry.Unit unit = Geometry.Unit.None;
-                    ParseCSAndUnit(tparams[2], out cs, out unit);
+                    ParseCSAndUnit(tparams[2], out Geometry.CoordinateSystem cs, out Geometry.Unit unit);
 
                     return new BGPoint(coordType, new Geometry.Traits(dimension, cs, unit));
                 }
@@ -919,7 +896,7 @@ namespace GraphicalDebugging
 
         class BGPointXY : BGPoint
         {
-            public new class LoaderCreator : ExpressionLoader.LoaderCreator
+            public new class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.Point; }
@@ -933,9 +910,7 @@ namespace GraphicalDebugging
                         return null;
 
                     string coordType = tparams[0];
-                    Geometry.CoordinateSystem cs = Geometry.CoordinateSystem.Cartesian;
-                    Geometry.Unit unit = Geometry.Unit.None;
-                    ParseCSAndUnit(tparams[1], out cs, out unit);
+                    ParseCSAndUnit(tparams[1], out Geometry.CoordinateSystem cs, out Geometry.Unit unit);
 
                     return new BGPointXY(coordType, new Geometry.Traits(2, cs, unit));
                 }
@@ -948,7 +923,7 @@ namespace GraphicalDebugging
 
         class BGBox : BoxLoader
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.Box; }
@@ -968,19 +943,13 @@ namespace GraphicalDebugging
                     PointLoader pointLoader = loaders.FindByType(ExpressionLoader.Kind.Point,
                                                                  m_min_corner,
                                                                  pointType) as PointLoader;
-                    if (pointLoader == null)
-                        return null;
-
-                    int sizeOf = ExpressionParser.GetTypeSizeof(debugger, type);
-                    if (ExpressionParser.IsInvalidSize(sizeOf))
-                        return null;
-
-                    long minDiff = ExpressionParser.GetAddressDifference(debugger, name, m_min_corner);
-                    long maxDiff = ExpressionParser.GetAddressDifference(debugger, name, m_max_corner);
-                    if (ExpressionParser.IsInvalidOffset(sizeOf, minDiff, maxDiff))
-                        return null;
-
-                    return new BGBox(pointLoader, pointType, sizeOf, minDiff, maxDiff);
+                    return pointLoader != null
+                        && debugger.GetTypeSizeof(type, out int sizeOf)
+                        && debugger.GetAddressOffset(name, m_min_corner, out long minDiff)
+                        && debugger.GetAddressOffset(name, m_max_corner, out long maxDiff)
+                        && !Debugger.IsInvalidOffset(sizeOf, minDiff, maxDiff)
+                         ? new BGBox(pointLoader, pointType, sizeOf, minDiff, maxDiff)
+                         : null;
                 }
             }
 
@@ -1019,7 +988,7 @@ namespace GraphicalDebugging
                                                                               string name, string type)
             {
                 string m_min_corner = name + ".m_min_corner";
-                string m_max_corner = name + ".m_max_corner";
+                //string m_max_corner = name + ".m_max_corner";
 
                 MemoryReader.Converter<double> pointConverter = pointLoader.GetMemoryConverter(mreader, debugger, m_min_corner, pointType);
                 if (pointConverter == null)
@@ -1030,16 +999,16 @@ namespace GraphicalDebugging
                             new MemoryReader.Member<double>(pointConverter, (int)maxDiff));
             }
 
-            PointLoader pointLoader;
-            string pointType;
-            long minDiff;
-            long maxDiff;
-            int sizeOf;
+            private readonly PointLoader pointLoader;
+            private readonly string pointType;
+            private readonly long minDiff;
+            private readonly long maxDiff;
+            private readonly int sizeOf;
         }
 
         class BGSegment : SegmentLoader
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.Segment; }
@@ -1059,19 +1028,13 @@ namespace GraphicalDebugging
                     PointLoader pointLoader = loaders.FindByType(ExpressionLoader.Kind.Point,
                                                                  first,
                                                                  pointType) as PointLoader;
-                    if (pointLoader == null)
-                        return null;
-
-                    int sizeOf = ExpressionParser.GetTypeSizeof(debugger, type);
-                    if (ExpressionParser.IsInvalidSize(sizeOf))
-                        return null;
-
-                    long firstDiff = ExpressionParser.GetAddressDifference(debugger, name, first);
-                    long secondDiff = ExpressionParser.GetAddressDifference(debugger, name, second);
-                    if (ExpressionParser.IsInvalidOffset(sizeOf, firstDiff, secondDiff))
-                        return null;
-
-                    return new BGSegment(pointLoader, pointType, sizeOf, firstDiff, secondDiff);
+                    return pointLoader != null
+                        && debugger.GetTypeSizeof(type, out int sizeOf)
+                        && debugger.GetAddressOffset(name, first, out long firstDiff)
+                        && debugger.GetAddressOffset(name, second, out long secondDiff)
+                        && !Debugger.IsInvalidOffset(sizeOf, firstDiff, secondDiff)
+                         ? new BGSegment(pointLoader, pointType, sizeOf, firstDiff, secondDiff)
+                         : null;
                 }
             }
 
@@ -1112,8 +1075,8 @@ namespace GraphicalDebugging
                 // NOTE: Because it can be created by derived class
                 //   and these members can be set to invalid values
                 //   e.g. BGReferringSegment
-                if (ExpressionParser.IsInvalidSize(sizeOf)
-                    || ExpressionParser.IsInvalidOffset(sizeOf, firstDiff, secondDiff))
+                if (sizeOf <= 0
+                 || Debugger.IsInvalidOffset(sizeOf, firstDiff, secondDiff))
                     return null;
 
                 string first = name + ".first";
@@ -1126,16 +1089,16 @@ namespace GraphicalDebugging
                             new MemoryReader.Member<double>(pointConverter, (int)secondDiff));
             }
 
-            PointLoader pointLoader;
-            string pointType;
-            long firstDiff;
-            long secondDiff;
-            int sizeOf;
+            private readonly PointLoader pointLoader;
+            private readonly string pointType;
+            private readonly long firstDiff;
+            private readonly long secondDiff;
+            private readonly int sizeOf;
         }
 
         class BGReferringSegment : BGSegment
         {
-            public new class LoaderCreator : ExpressionLoader.LoaderCreator
+            public new class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.Segment; }
@@ -1165,7 +1128,7 @@ namespace GraphicalDebugging
 
         class BGNSphere : NSphereLoader
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.NSphere; }
@@ -1212,16 +1175,16 @@ namespace GraphicalDebugging
 
                 Geometry.Point center = pointLoader.LoadPoint(mreader, debugger,
                                                               m_center, pointType);
-                double radius = 0;
-                bool ok = ExpressionParser.TryLoadDouble(debugger, m_radius, out radius);
+
+                bool ok = debugger.TryLoadDouble(m_radius, out double radius);
 
                 return Util.IsOk(center, ok)
                      ? new ExpressionDrawer.NSphere(center, radius)
                      : null;
             }
 
-            PointLoader pointLoader;
-            string pointType;
+            private readonly PointLoader pointLoader;
+            private readonly string pointType;
         }
 
         abstract class PointRange<ResultType> : RangeLoader<ResultType>
@@ -1301,7 +1264,7 @@ namespace GraphicalDebugging
                              , Geometry.IContainer<Geometry.Point>
                              , new()
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public delegate Loader DerivedConstructor(ContainerLoader containerLoader, string containerType,
                                                           PointLoader pointLoader, string pointType);
@@ -1324,9 +1287,8 @@ namespace GraphicalDebugging
                     if (id != this.id)
                         return null;
 
-                    string pointType, containerType;
                     GetBGContainerInfo(type, pointTIndex, containerTIndex, allocatorTIndex,
-                                       out pointType, out containerType);
+                                       out string pointType, out string containerType);
 
                     ContainerLoader containerLoader = loaders.FindByType(ExpressionLoader.Kind.Container,
                                                                          name,
@@ -1334,8 +1296,7 @@ namespace GraphicalDebugging
                     if (containerLoader == null)
                         return null;
 
-                    string pointName, dummyType;
-                    containerLoader.ElementInfo(name, containerType, out pointName, out dummyType);
+                    containerLoader.ElementInfo(name, containerType, out string pointName, out string _);
 
                     PointLoader pointLoader = loaders.FindByType(ExpressionLoader.Kind.Point,
                                                                  pointName,
@@ -1346,12 +1307,12 @@ namespace GraphicalDebugging
                     return derivedConstructor(containerLoader, containerType, pointLoader, pointType);
                 }
 
-                Kind kind;
-                string id;
-                int pointTIndex;
-                int containerTIndex;
-                int allocatorTIndex;
-                DerivedConstructor derivedConstructor;
+                private readonly Kind kind;
+                private readonly string id;
+                private readonly int pointTIndex;
+                private readonly int containerTIndex;
+                private readonly int allocatorTIndex;
+                private readonly DerivedConstructor derivedConstructor;
             }
 
             protected BGRange(ContainerLoader containerLoader, string containerType,
@@ -1377,8 +1338,7 @@ namespace GraphicalDebugging
 
                 if (mreader != null)
                 {
-                    string pointName, dummyType;
-                    containerLoader.ElementInfo(name, containerType, out pointName, out dummyType);
+                    containerLoader.ElementInfo(name, containerType, out string pointName, out string _);
 
                     result = LoadMemory(mreader, debugger, name, type,
                                         pointName, pointType, pointLoader,
@@ -1395,10 +1355,10 @@ namespace GraphicalDebugging
                 return result;
             }
 
-            ContainerLoader containerLoader;
-            string containerType;
-            PointLoader pointLoader;
-            string pointType;
+            readonly ContainerLoader containerLoader;
+            readonly string containerType;
+            readonly PointLoader pointLoader;
+            readonly string pointType;
         }
 
         class BGLinestring : BGRange<ExpressionDrawer.Linestring>
@@ -1426,7 +1386,7 @@ namespace GraphicalDebugging
 
         class BGMultiLinestring : RangeLoader<ExpressionDrawer.MultiLinestring>
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.MultiLinestring; }
@@ -1435,8 +1395,7 @@ namespace GraphicalDebugging
                     if (id != "boost::geometry::model::multi_linestring")
                         return null;
 
-                    string lsType, containerType;
-                    GetBGContainerInfo(type, 0, 1, 2, out lsType, out containerType);
+                    GetBGContainerInfo(type, 0, 1, 2, out string lsType, out string containerType);
 
                     ContainerLoader containerLoader = loaders.FindByType(ExpressionLoader.Kind.Container,
                                                                          name,
@@ -1444,8 +1403,7 @@ namespace GraphicalDebugging
                     if (containerLoader == null)
                         return null;
 
-                    string lsName, dummyType;
-                    containerLoader.ElementInfo(name, containerType, out lsName, out dummyType);
+                    containerLoader.ElementInfo(name, containerType, out string lsName, out string _);
 
                     RangeLoader<ExpressionDrawer.Linestring>
                         lsLoader = loaders.FindByType(ExpressionLoader.Kind.Linestring,
@@ -1454,17 +1412,15 @@ namespace GraphicalDebugging
                     if (lsLoader == null)
                         return null;
 
-                    return new BGMultiLinestring(containerLoader, containerType, lsLoader, lsType);
+                    return new BGMultiLinestring(containerLoader, lsLoader, lsType);
                 }
             }
 
             private BGMultiLinestring(ContainerLoader containerLoader,
-                                      string containerType,
                                       RangeLoader<ExpressionDrawer.Linestring> lsLoader,
                                       string lsType)
             {
                 this.containerLoader = containerLoader;
-                this.containerType = containerType;
                 this.lsLoader = lsLoader;
                 this.lsType = lsType;
             }
@@ -1494,10 +1450,9 @@ namespace GraphicalDebugging
                 return ok ? mls : null;
             }
 
-            ContainerLoader containerLoader;
-            string containerType;
-            RangeLoader<ExpressionDrawer.Linestring> lsLoader;
-            string lsType;
+            readonly ContainerLoader containerLoader;
+            readonly RangeLoader<ExpressionDrawer.Linestring> lsLoader;
+            readonly string lsType;
         }
 
         class BGRing : BGRange<ExpressionDrawer.Ring>
@@ -1548,7 +1503,7 @@ namespace GraphicalDebugging
 
         class BGPolygon : PolygonLoader
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.Polygon; }
@@ -1560,33 +1515,33 @@ namespace GraphicalDebugging
                     string outerName = name + ".m_outer";
                     string innersName = name + ".m_inners";
 
-                    Expression outerExpr = debugger.GetExpression(outerName);
-                    Expression innersExpr = debugger.GetExpression(innersName);
-
-                    string outerType = outerExpr.Type;
+                    string outerType = debugger.GetValueType(outerName);
+                    if (outerType == null)
+                        return null;
                     BGRing outerLoader = loaders.FindByType(ExpressionLoader.Kind.Ring,
                                                             outerName, outerType) as BGRing;
                     if (outerLoader == null)
                         return null;
 
-                    string innersType = innersExpr.Type;
+                    string innersType = debugger.GetValueType(innersName);
+                    if (innersType == null)
+                        return null;
                     ContainerLoader innersLoader = loaders.FindByType(ExpressionLoader.Kind.Container,
                                                                       innersName, innersType) as ContainerLoader;
                     if (innersLoader == null)
                         return null;
 
-                    return new BGPolygon(outerLoader, outerType, innersLoader, innersType);
+                    return new BGPolygon(outerLoader, outerType, innersLoader);
                 }
             }
 
             // TODO: Should this be BGRing or a generic ring Loader?
             private BGPolygon(BGRing outerLoader, string outerType,
-                              ContainerLoader innersLoader, string innersType)
+                              ContainerLoader innersLoader)
             {
                 this.outerLoader = outerLoader;
                 this.outerType = outerType;
                 this.innersLoader = innersLoader;
-                this.innersType = innersType;
             }
 
             public override Geometry.Traits GetTraits(MemoryReader mreader, Debugger debugger,
@@ -1626,15 +1581,14 @@ namespace GraphicalDebugging
                      : null;
             }
 
-            BGRing outerLoader;
-            string outerType;
-            ContainerLoader innersLoader;
-            string innersType;
+            readonly BGRing outerLoader;
+            readonly string outerType;
+            readonly ContainerLoader innersLoader;
         }
 
         class BGMultiPolygon : RangeLoader<ExpressionDrawer.MultiPolygon>
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.MultiPolygon; }
@@ -1643,8 +1597,7 @@ namespace GraphicalDebugging
                     if (id != "boost::geometry::model::multi_polygon")
                         return null;
 
-                    string polyType, containerType;
-                    GetBGContainerInfo(type, 0, 1, 2, out polyType, out containerType);
+                    GetBGContainerInfo(type, 0, 1, 2, out string polyType, out string containerType);
 
                     ContainerLoader containerLoader = loaders.FindByType(ExpressionLoader.Kind.Container,
                                                                          name,
@@ -1652,8 +1605,7 @@ namespace GraphicalDebugging
                     if (containerLoader == null)
                         return null;
 
-                    string polyName, dummyType;
-                    containerLoader.ElementInfo(name, containerType, out polyName, out dummyType);
+                    containerLoader.ElementInfo(name, containerType, out string polyName, out string _);
 
                     PolygonLoader polyLoader = loaders.FindByType(ExpressionLoader.Kind.Polygon,
                                                                   polyName,
@@ -1661,18 +1613,15 @@ namespace GraphicalDebugging
                     if (polyLoader == null)
                         return null;
 
-                    return new BGMultiPolygon(containerLoader, containerType,
-                                              polyLoader, polyType);
+                    return new BGMultiPolygon(containerLoader, polyLoader, polyType);
                 }
             }
 
             private BGMultiPolygon(ContainerLoader containerLoader,
-                                   string containerType,
                                    PolygonLoader polyLoader,
                                    string polyType)
             {
                 this.containerLoader = containerLoader;
-                this.containerType = containerType;
                 this.polyLoader = polyLoader;
                 this.polyType = polyType;
             }
@@ -1702,15 +1651,14 @@ namespace GraphicalDebugging
                 return ok ? mpoly : null;
             }
 
-            ContainerLoader containerLoader;
-            string containerType;
-            PolygonLoader polyLoader;
-            string polyType;
+            readonly ContainerLoader containerLoader;
+            readonly PolygonLoader polyLoader;
+            readonly string polyType;
         }
 
         class BGBufferedRing : RangeLoader<ExpressionDrawer.Ring>
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.Ring; }
@@ -1755,14 +1703,14 @@ namespace GraphicalDebugging
                 return ringLoader.Load(mreader, debugger, name, ringType, callback);
             }
 
-            RangeLoader<ExpressionDrawer.Ring> ringLoader;
-            string ringType;
+            readonly RangeLoader<ExpressionDrawer.Ring> ringLoader;
+            readonly string ringType;
         }
 
         // NOTE: There is no MultiRing concept so use MultiPolygon for now
         class BGBufferedRingCollection : RangeLoader<ExpressionDrawer.MultiPolygon>
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.MultiPolygon; } // Or MultiGeometry
@@ -1784,8 +1732,7 @@ namespace GraphicalDebugging
                     if (containerLoader == null)
                         return null;
 
-                    string ringName, dummyType;
-                    containerLoader.ElementInfo(name, containerType, out ringName, out dummyType);
+                    containerLoader.ElementInfo(name, containerType, out string ringName, out string _);
 
                     RangeLoader<ExpressionDrawer.Ring>
                         ringLoader = loaders.FindByType(ExpressionLoader.Kind.Ring,
@@ -1794,16 +1741,14 @@ namespace GraphicalDebugging
                     if (ringLoader == null)
                         return null;
 
-                    return new BGBufferedRingCollection(containerLoader, containerType,
-                                                        ringLoader, ringType);
+                    return new BGBufferedRingCollection(containerLoader, ringLoader, ringType);
                 }
             }
 
-            private BGBufferedRingCollection(ContainerLoader containerLoader, string containerType,
+            private BGBufferedRingCollection(ContainerLoader containerLoader,
                                              RangeLoader<ExpressionDrawer.Ring> ringLoader, string ringType)
             {
                 this.containerLoader = containerLoader;
-                this.containerType = containerType;
                 this.ringLoader = ringLoader;
                 this.ringType = ringType;
             }
@@ -1833,10 +1778,9 @@ namespace GraphicalDebugging
                 return ok ? mpoly : null;
             }
 
-            ContainerLoader containerLoader;
-            string containerType;
-            RangeLoader<ExpressionDrawer.Ring> ringLoader;
-            string ringType;
+            readonly ContainerLoader containerLoader;
+            readonly RangeLoader<ExpressionDrawer.Ring> ringLoader;
+            readonly string ringType;
         }
 
         // NOTE: Technically R-tree could be treated as a Container of Points or MultiPoint
@@ -1845,7 +1789,7 @@ namespace GraphicalDebugging
 
         class BGIRtree : GeometryLoader<ExpressionDrawer.DrawablesContainer>
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.OtherGeometry; }
@@ -1856,7 +1800,7 @@ namespace GraphicalDebugging
 
                     try
                     {
-                        return new BGIRtree(loaders, debugger, name, type, id);
+                        return new BGIRtree(loaders, debugger, name, type);
                     }
                     catch(CreationException)
                     {
@@ -1868,12 +1812,11 @@ namespace GraphicalDebugging
             private class CreationException : Exception
             { }
 
-            private BGIRtree(Loaders loaders, Debugger debugger, string name, string type, string id)
+            private BGIRtree(Loaders loaders, Debugger debugger, string name, string type)
             {
-                string valueType;
                 indexableLoader = IndexableLoader(loaders, debugger,
                                                   name, type,
-                                                  out valueType,
+                                                  out string _,
                                                   out indexableMember,
                                                   out indexableType);
                 if (indexableLoader == null)
@@ -1890,56 +1833,51 @@ namespace GraphicalDebugging
 
                 string nodePtrName = RootNodePtr(name);
                 string nodeVariantName = "*" + nodePtrName;
-                string nodeVariantType = ExpressionParser.GetValueType(debugger, nodeVariantName);
+                string nodeVariantType = debugger.GetValueType(nodeVariantName);
                 if (Util.Empty(nodeVariantType))
                     throw new CreationException();
 
                 if (!Util.Tparams(nodeVariantType, out leafType, out internalNodeType))
                     throw new CreationException();
 
-                string leafElemsName;
                 leafElementsLoader = ElementsLoader(loaders, debugger,
                                                     nodePtrName, leafType,
-                                                    out leafElemsName, out leafElemsType);
+                                                    out string leafElemsName, out leafElemsType);
                 if (leafElementsLoader == null)
                     throw new CreationException();
 
-                string internalNodeElemsName;
                 internalNodeElementsLoader = ElementsLoader(loaders, debugger,
                                                             nodePtrName, internalNodeType,
-                                                            out internalNodeElemsName, out internalNodeElemsType);
+                                                            out string internalNodeElemsName, out internalNodeElemsType);
                 if (internalNodeElementsLoader == null)
                     throw new CreationException();
 
                 // For Memory Loading
 
-                nodePtrType = ExpressionParser.GetValueType(debugger, nodePtrName);
-                nodePtrSizeOf = ExpressionParser.GetTypeSizeof(debugger, nodePtrType);
+                nodePtrType = debugger.GetValueType(nodePtrName);
+                // TODO: Handle return values
+                debugger.GetTypeSizeof(nodePtrType, out nodePtrSizeOf);                
+                debugger.GetAddressOffset(nodeVariantName, NodeElements(nodePtrName, leafType), out leafElemsDiff);
+                debugger.GetAddressOffset(nodeVariantName, NodeElements(nodePtrName, internalNodeType), out internalNodeElemsDiff);
 
-                leafElemsDiff = ExpressionParser.GetAddressDifference(debugger, nodeVariantName,
-                                                                      NodeElements(nodePtrName, leafType));
-                internalNodeElemsDiff = ExpressionParser.GetAddressDifference(debugger, nodeVariantName,
-                                                                              NodeElements(nodePtrName, internalNodeType));
-                string leafElemName;
                 leafElementsLoader.ElementInfo(leafElemsName, leafElemsType,
-                                               out leafElemName, out leafElemType);
-                string internalNodeElemName;
+                                               out string leafElemName, out string _);
                 internalNodeElementsLoader.ElementInfo(internalNodeElemsName, internalNodeElemsType,
-                                                       out internalNodeElemName, out internalNodeElemType);
+                                                       out string internalNodeElemName, out string _);
 
-                indexableDiff = ExpressionParser.GetAddressDifference(debugger, leafElemName,
-                                                                      leafElemName + indexableMember);
-                nodePtrDiff = ExpressionParser.GetAddressDifference(debugger, internalNodeElemName,
-                                                                    internalNodeElemName + ".second");
+                // TODO: Handle return values
+                debugger.GetAddressOffset(leafElemName, leafElemName + indexableMember, out indexableDiff);
+                debugger.GetAddressOffset(internalNodeElemName, internalNodeElemName + ".second", out nodePtrDiff);
 
                 string whichName = "(" + nodeVariantName + ").which_";
-                whichType = ExpressionParser.GetValueType(debugger, whichName);
-                whichSizeOf = ExpressionParser.GetTypeSizeof(debugger, whichType);
-                whichDiff = ExpressionParser.GetAddressDifference(debugger, nodeVariantName, whichName);
+                whichType = debugger.GetValueType(whichName);
 
-                nodeVariantSizeof = ExpressionParser.GetValueSizeof(debugger, nodeVariantName);
-                nodePtrPairSizeof = ExpressionParser.GetValueSizeof(debugger, internalNodeElemName);
-                valueSizeof = ExpressionParser.GetValueSizeof(debugger, leafElemName);
+                // TODO: Handle return values
+                debugger.GetTypeSizeof(whichType, out whichSizeOf);
+                debugger.GetAddressOffset(nodeVariantName, whichName, out whichDiff);
+                debugger.GetValueSizeof(nodeVariantName, out nodeVariantSizeof);
+                debugger.GetValueSizeof(internalNodeElemName, out nodePtrPairSizeof);
+                debugger.GetValueSizeof(leafElemName, out valueSizeof);
             }
 
             public override Geometry.Traits GetTraits(MemoryReader mreader, Debugger debugger,
@@ -1952,15 +1890,13 @@ namespace GraphicalDebugging
                                                             string name, string type,
                                                             LoadCallback callback)
             {
-                ExpressionDrawer.DrawablesContainer result = null;
-
                 int size = LoadSize(debugger, name);
                 if (size <= 0)
                     return null;
 
                 string nodePtrName = RootNodePtr(name);
 
-                LoadMemory(mreader, debugger, nodePtrName, out result, callback);
+                LoadMemory(mreader, debugger, nodePtrName, out ExpressionDrawer.DrawablesContainer result, callback);
 
                 if (result == null)
                 {
@@ -1985,20 +1921,16 @@ namespace GraphicalDebugging
                 result = null;
 
                 string nodeVariantName = "*" + nodePtrName;
-                string whichName = "(" + nodeVariantName + ").which_";
+                //string whichName = "(" + nodeVariantName + ").which_";
 
                 if (mreader == null)
                     return;
 
-                if (ExpressionParser.IsInvalidAddressDifference(leafElemsDiff)
-                    || ExpressionParser.IsInvalidAddressDifference(internalNodeElemsDiff)
-                    || ExpressionParser.IsInvalidAddressDifference(indexableDiff)
-                    || ExpressionParser.IsInvalidAddressDifference(nodePtrDiff)
-                    || ExpressionParser.IsInvalidAddressDifference(whichDiff))
+                // TODO: replace with something else
+                if (leafElemsDiff < 0 || internalNodeElemsDiff < 0 || indexableDiff < 0 || nodePtrDiff < 0 || whichDiff < 0)
                     return;
 
-                ulong rootAddr = ExpressionParser.GetValueAddress(debugger, nodeVariantName);
-                if (rootAddr == 0)
+                 if (!debugger.GetValueAddress(nodeVariantName, out ulong rootAddr))
                     return;
 
                 MemoryReader.Converter<int> whichConverter = mreader.GetValueConverter<int>(whichType, whichSizeOf);
@@ -2024,15 +1956,14 @@ namespace GraphicalDebugging
                         new MemoryReader.Member<ulong>(nodePtrConverter, (int)nodePtrDiff));
 
                 string leafElemsName = NodeElements(nodePtrName, leafType);
-                string leafElemName, leafElemType;
                 leafElementsLoader.ElementInfo(leafElemsName, leafElemsType,
-                                                out leafElemName, out leafElemType);
+                                               out string leafElemName, out string leafElemType);
+
                 string indexableName = leafElemName + indexableMember;
 
                 string internalNodeElemsName = NodeElements(nodePtrName, internalNodeType);
-                string internalNodeElemName;
                 internalNodeElementsLoader.ElementInfo(internalNodeElemsName, internalNodeElemsType,
-                                                        out internalNodeElemName, out internalNodeElemType);
+                                                       out string internalNodeElemName, out string internalNodeElemType);
 
                 MemoryReader.Converter<double> indexableConverter =
                     indexableLoader.GetMemoryConverter(mreader, debugger, indexableName, indexableType);
@@ -2154,8 +2085,7 @@ namespace GraphicalDebugging
                                              ExpressionDrawer.DrawablesContainer result,
                                              LoadCallback callback)
             {
-                bool isLeaf;
-                if (!IsLeaf(debugger, nodePtrName, out isLeaf))
+                if (!IsLeaf(debugger, nodePtrName, out bool isLeaf))
                     return false;
 
                 string nodeType = leafType;
@@ -2213,7 +2143,8 @@ namespace GraphicalDebugging
                 // addresses can be calculated on loader creation and address 0 is
                 // currently reserved as invalid.
                 // So below the address of the R-tree object is used.
-                ulong address = ExpressionParser.GetValueAddress(debugger, name);
+                if (!debugger.GetValueAddress(name, out ulong address))
+                    return null;
                 string addressStr = address.ToString();
 
                 string valueId = Util.TypeId(valueType);
@@ -2222,10 +2153,8 @@ namespace GraphicalDebugging
                 indexableType = valueType;
                 if (valueId == "std::pair" || valueId == "std::tuple" || valueId == "boost::tuple")
                 {
-                    string firstType;
-                    if (!Util.Tparams(valueType, out firstType))
+                    if (!Util.Tparams(valueType, out string firstType))
                         return null;
-
                     
                     indexableLoader = loaders.FindByType(OnlyIndexables,
                                                          "(*((" + firstType + "*)" + addressStr + "))",
@@ -2266,7 +2195,7 @@ namespace GraphicalDebugging
                 containerType = "";
 
                 Expression expr = debugger.GetExpression(elementsName);
-                if (!expr.IsValidValue)
+                if (!expr.IsValid)
                     return null;
 
                 elementsName = expr.Name;
@@ -2278,7 +2207,7 @@ namespace GraphicalDebugging
 
             int LoadSize(Debugger debugger, string name)
             {
-                return ExpressionParser.LoadSize(debugger, name + ".m_members.values_count");
+                return debugger.TryLoadUInt(name + ".m_members.values_count", out int size) ? size : 0;
             }
 
             static string RootNodePtr(string name)
@@ -2295,47 +2224,44 @@ namespace GraphicalDebugging
             {
                 result = false;
 
-                int which = 0;
-                if (!ExpressionParser.TryLoadInt(debugger, nodePtrName + "->which_", out which))
+                if (!debugger.TryLoadInt(nodePtrName + "->which_", out int which))
                     return false;
 
                 result = (which == 0);
                 return true;
             }
 
-            ContainerLoader leafElementsLoader;
-            ContainerLoader internalNodeElementsLoader;
-            DrawableLoader indexableLoader;
+            readonly ContainerLoader leafElementsLoader;
+            readonly ContainerLoader internalNodeElementsLoader;
+            readonly DrawableLoader indexableLoader;
 
-            Geometry.Traits traits;
+            readonly Geometry.Traits traits;
 
-            string leafType;
-            string internalNodeType;
-            string indexableMember;
-            string indexableType;
-            string nodePtrType; // pointer to root or a node in internal node
-            string leafElemsType; // type of container of values
-            string internalNodeElemsType; // type of container of ptr_pair<box, node_ptr>
-            string leafElemType; // type of value
-            string internalNodeElemType; // type of ptr_pair<box, node_ptr>
-            string whichType; // type of which_ member
+            readonly string leafType;
+            readonly string internalNodeType;
+            readonly string indexableMember;
+            readonly string indexableType;
+            readonly string nodePtrType; // pointer to root or a node in internal node
+            readonly string leafElemsType; // type of container of values
+            readonly string internalNodeElemsType; // type of container of ptr_pair<box, node_ptr>
+            readonly string whichType; // type of which_ member
 
-            long leafElemsDiff; // offset of container of values in variant node which is a leaf
-            long internalNodeElemsDiff; // offset of container of ptr_pair<box, node_ptr> in variant node which is internal node
-            long indexableDiff; // offset of indexable in value
-            long nodePtrDiff; // offset of node_ptr in ptr_pair<box, node_ptr>
-            long whichDiff; // offset of which_ member of variant node
+            readonly long leafElemsDiff; // offset of container of values in variant node which is a leaf
+            readonly long internalNodeElemsDiff; // offset of container of ptr_pair<box, node_ptr> in variant node which is internal node
+            readonly long indexableDiff; // offset of indexable in value
+            readonly long nodePtrDiff; // offset of node_ptr in ptr_pair<box, node_ptr>
+            readonly long whichDiff; // offset of which_ member of variant node
 
-            int nodePtrSizeOf; // size of pointer (4 or 8)
-            int whichSizeOf; // size of which_ member            
-            int nodeVariantSizeof; // size of variant node
-            int nodePtrPairSizeof; // size of ptr_pair<box, node_ptr>
-            int valueSizeof; // size of value
+            readonly int nodePtrSizeOf; // size of pointer (4 or 8)
+            readonly int whichSizeOf; // size of which_ member            
+            readonly int nodeVariantSizeof; // size of variant node
+            readonly int nodePtrPairSizeof; // size of ptr_pair<box, node_ptr>
+            readonly int valueSizeof; // size of value
         }
 
         class BPPoint : BXPoint
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.Point; }
@@ -2362,7 +2288,7 @@ namespace GraphicalDebugging
 
         class BPSegment : SegmentLoader
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.Segment; }
@@ -2384,25 +2310,23 @@ namespace GraphicalDebugging
                                                             string name, string type,
                                                             LoadCallback callback) // dummy callback
             {
-                double x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-                bool okx0 = ExpressionParser.TryLoadDouble(debugger, name + ".points_[0].coords_[0]", out x0);
-                bool oky0 = ExpressionParser.TryLoadDouble(debugger, name + ".points_[0].coords_[1]", out y0);
-                bool okx1 = ExpressionParser.TryLoadDouble(debugger, name + ".points_[1].coords_[0]", out x1);
-                bool oky1 = ExpressionParser.TryLoadDouble(debugger, name + ".points_[1].coords_[1]", out y1);
+                if (debugger.TryLoadDouble(name + ".points_[0].coords_[0]", out double x0)
+                 && debugger.TryLoadDouble(name + ".points_[0].coords_[1]", out double y0)
+                 && debugger.TryLoadDouble(name + ".points_[1].coords_[0]", out double x1)
+                 && debugger.TryLoadDouble(name + ".points_[1].coords_[1]", out double y1))
+                {
+                    Geometry.Point first_p = new Geometry.Point(x0, y0);
+                    Geometry.Point second_p = new Geometry.Point(x1, y1);
 
-                if (! Util.IsOk(okx0, oky0, okx1, oky1))
-                    return null;
-
-                Geometry.Point first_p = new Geometry.Point(x0, y0);
-                Geometry.Point second_p = new Geometry.Point(x1, y1);
-
-                return new ExpressionDrawer.Segment(first_p, second_p);
+                    return new ExpressionDrawer.Segment(first_p, second_p);
+                }
+                return null;
             }
         }
 
         class BPBox : BoxLoader
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.Box; }
@@ -2424,25 +2348,23 @@ namespace GraphicalDebugging
                                                             string name, string type,
                                                             LoadCallback callback) // dummy callback
             {
-                double xl = 0, xh = 0, yl = 0, yh = 0;
-                bool okxl = ExpressionParser.TryLoadDouble(debugger, name + ".ranges_[0].coords_[0]", out xl);
-                bool okxh = ExpressionParser.TryLoadDouble(debugger, name + ".ranges_[0].coords_[1]", out xh);
-                bool okyl = ExpressionParser.TryLoadDouble(debugger, name + ".ranges_[1].coords_[0]", out yl);
-                bool okyh = ExpressionParser.TryLoadDouble(debugger, name + ".ranges_[1].coords_[1]", out yh);
+                if (debugger.TryLoadDouble(name + ".ranges_[0].coords_[0]", out double xl)
+                 && debugger.TryLoadDouble(name + ".ranges_[0].coords_[1]", out double xh)
+                 && debugger.TryLoadDouble(name + ".ranges_[1].coords_[0]", out double yl)
+                 && debugger.TryLoadDouble(name + ".ranges_[1].coords_[1]", out double yh))
+                {
+                    Geometry.Point first_p = new Geometry.Point(xl, yl);
+                    Geometry.Point second_p = new Geometry.Point(xh, yh);
 
-                if (! Util.IsOk(okxl, okxh, okyl, okyh))
-                    return null;
-
-                Geometry.Point first_p = new Geometry.Point(xl, yl);
-                Geometry.Point second_p = new Geometry.Point(xh, yh);
-
-                return new ExpressionDrawer.Box(first_p, second_p);
+                    return new ExpressionDrawer.Box(first_p, second_p);
+                }
+                return null;
             }
         }
 
         class BPRing : PointRange<ExpressionDrawer.Ring>
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.Ring; }
@@ -2464,8 +2386,7 @@ namespace GraphicalDebugging
                     if (containerLoader == null)
                         return null;
 
-                    string pointName, dummyType;
-                    containerLoader.ElementInfo(name, containerType, out pointName, out dummyType);
+                    containerLoader.ElementInfo(name, containerType, out string pointName, out string _);
 
                     BPPoint pointLoader = loaders.FindByType(ExpressionLoader.Kind.Point,
                                                              pointName,
@@ -2502,8 +2423,7 @@ namespace GraphicalDebugging
 
                 if (mreader != null)
                 {
-                    string pointName, dummyType;
-                    containerLoader.ElementInfo(name, containerType, out pointName, out dummyType);
+                    containerLoader.ElementInfo(name, containerType, out string pointName, out _);
 
                     result = LoadMemory(mreader, debugger,
                                         containerName, type,
@@ -2521,15 +2441,15 @@ namespace GraphicalDebugging
                 return result;
             }
 
-            ContainerLoader containerLoader;
-            string containerType;
-            BPPoint pointLoader;
-            string pointType;
+            readonly ContainerLoader containerLoader;
+            readonly string containerType;
+            readonly BPPoint pointLoader;
+            readonly string pointType;
         }
 
         class BPPolygon : PolygonLoader
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.Polygon; }
@@ -2563,17 +2483,16 @@ namespace GraphicalDebugging
                     if (holesLoader == null)
                         return null;
 
-                    return new BPPolygon(outerLoader, polygonType, holesLoader, containerType);
+                    return new BPPolygon(outerLoader, polygonType, holesLoader);
                 }
             }
 
             private BPPolygon(BPRing outerLoader, string polygonType,
-                              ContainerLoader holesLoader, string containerType)
+                              ContainerLoader holesLoader)
             {
                 this.outerLoader = outerLoader;
                 this.polygonType = polygonType;
                 this.holesLoader = holesLoader;
-                this.containerType = containerType;
             }
 
             public override Geometry.Traits GetTraits(MemoryReader mreader, Debugger debugger,
@@ -2612,15 +2531,14 @@ namespace GraphicalDebugging
                      : null;
             }
 
-            BPRing outerLoader;
-            string polygonType;
-            ContainerLoader holesLoader;
-            string containerType;
+            readonly BPRing outerLoader;
+            readonly string polygonType;
+            readonly ContainerLoader holesLoader;
         }
 
         class BVariant : DrawableLoader
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.Variant; }
@@ -2654,8 +2572,7 @@ namespace GraphicalDebugging
             public override Geometry.Traits GetTraits(MemoryReader mreader, Debugger debugger,
                                                       string name)
             {
-                int which = 0;
-                if (!ExpressionParser.TryLoadInt(debugger, name + ".which_", out which))
+                if (!debugger.TryLoadInt(name + ".which_", out int which))
                     return null;
 
                 if (which < 0 || tparams.Count <= which || tparams.Count != loaders.Length)
@@ -2671,8 +2588,7 @@ namespace GraphicalDebugging
                                                             string name, string type,
                                                             LoadCallback callback)
             {
-                int which = 0;
-                if (!ExpressionParser.TryLoadInt(debugger, name + ".which_", out which))
+                if (!debugger.TryLoadInt(name + ".which_", out int which))
                     return null;
 
                 if (which < 0 || tparams.Count <= which || tparams.Count != loaders.Length)
@@ -2688,13 +2604,13 @@ namespace GraphicalDebugging
                                            callback);
             }
 
-            List<string> tparams;
-            DrawableLoader[] loaders;
+            readonly List<string> tparams;
+            readonly DrawableLoader[] loaders;
         }
 
         class StdPairPoint : PointLoader
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.Point; }
@@ -2725,10 +2641,8 @@ namespace GraphicalDebugging
 
             public override ExpressionDrawer.Point LoadPointParsed(Debugger debugger, string name, string type)
             {
-                double x = 0, y = 0;
-                bool okx = ExpressionParser.TryLoadDouble(debugger, name + ".first", out x);
-                bool oky = ExpressionParser.TryLoadDouble(debugger, name + ".second", out y);
-                return Util.IsOk(okx, oky)
+                return debugger.TryLoadDouble(name + ".first", out double x)
+                    && debugger.TryLoadDouble(name + ".second", out double y)
                      ? new ExpressionDrawer.Point(x, y)
                      : null;
             }
@@ -2743,8 +2657,7 @@ namespace GraphicalDebugging
                 if (converter.ValueCount() != 2)
                     throw new ArgumentOutOfRangeException("converter.ValueCount()");
 
-                ulong address = ExpressionParser.GetValueAddress(debugger, name);
-                if (address == 0)
+                if (!debugger.GetValueAddress(name, out ulong address))
                     return null;
 
                 double[] values = new double[2];
@@ -2762,35 +2675,31 @@ namespace GraphicalDebugging
             {
                 string first = name + ".first";
                 string second = name + ".second";
-                long firstOffset = ExpressionParser.GetAddressDifference(debugger, name, first);
-                long secondOffset = ExpressionParser.GetAddressDifference(debugger, name, second);
-                if (ExpressionParser.IsInvalidAddressDifference(firstOffset)
-                 || ExpressionParser.IsInvalidAddressDifference(secondOffset))
-                    return null;
-                int firstSize = ExpressionParser.GetTypeSizeof(debugger, firstType);
-                int secondSize = ExpressionParser.GetTypeSizeof(debugger, secondType);
-                if (firstSize == 0 || secondSize == 0)
+                if (!debugger.GetAddressOffset(name, first, out long firstOffset)
+                 || !debugger.GetAddressOffset(name, second, out long secondOffset)
+                 || !debugger.GetTypeSizeof(firstType, out int firstSize)
+                 || !debugger.GetTypeSizeof(secondType, out int secondSize))
                     return null;
                 MemoryReader.ValueConverter<double> firstConverter = mreader.GetNumericConverter(firstType, firstSize);
                 MemoryReader.ValueConverter<double> secondConverter = mreader.GetNumericConverter(secondType, secondSize);
-                if (firstConverter == null || secondConverter == null)
-                    return null;
-                int sizeOfPair = ExpressionParser.GetTypeSizeof(debugger, type);
-                if (sizeOfPair == 0)
-                    return null;
-                return new MemoryReader.StructConverter<double>(
+                return firstConverter != null
+                    && secondConverter != null
+                    && debugger.GetTypeSizeof(type, out int sizeOfPair)
+                    && !Debugger.IsInvalidOffset(sizeOfPair, firstOffset, secondOffset)
+                     ? new MemoryReader.StructConverter<double>(
                             sizeOfPair,
                             new MemoryReader.Member<double>(firstConverter, (int)firstOffset),
-                            new MemoryReader.Member<double>(secondConverter, (int)secondOffset));
+                            new MemoryReader.Member<double>(secondConverter, (int)secondOffset))
+                     : null;
             }
 
-            string firstType;
-            string secondType;
+            readonly string firstType;
+            readonly string secondType;
         }
 
         class StdComplexPoint : BXPoint
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.Point; }
@@ -2815,7 +2724,7 @@ namespace GraphicalDebugging
 
         class BGTurn : GeometryLoader<ExpressionDrawer.Turn>
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public LoaderCreator(string id)
                 {
@@ -2843,7 +2752,7 @@ namespace GraphicalDebugging
                     return new BGTurn(pointLoader, pointType);
                 }
 
-                string id;
+                readonly string id;
             }
 
             private BGTurn(PointLoader pointLoader, string pointType)
@@ -2871,19 +2780,19 @@ namespace GraphicalDebugging
                     return null;
 
                 char method = '?';
-                Expression expr_method = debugger.GetExpression(name + ".method");
-                if (expr_method.IsValidValue)
-                    method = MethodChar(expr_method.Value);
+                string methodValue = debugger.GetValue(name + ".method");
+                if (methodValue != null)
+                    method = MethodChar(methodValue);
 
                 char op0 = '?';
-                Expression expr_op0 = debugger.GetExpression(name + ".operations[0].operation");
-                if (expr_op0.IsValidValue)
-                    op0 = OperationChar(expr_op0.Value);
+                string op0Value = debugger.GetValue(name + ".operations[0].operation");
+                if (op0Value != null)
+                    op0 = OperationChar(op0Value);
 
                 char op1 = '?';
-                Expression expr_op1 = debugger.GetExpression(name + ".operations[1].operation");
-                if (expr_op1.IsValidValue)
-                    op1 = OperationChar(expr_op1.Value);
+                string op1Value = debugger.GetValue(name + ".operations[1].operation");
+                if (op1Value != null)
+                    op1 = OperationChar(op1Value);
 
                 return new ExpressionDrawer.Turn(p, method, op0, op1);
             }
@@ -2918,13 +2827,13 @@ namespace GraphicalDebugging
                 }
             }
 
-            PointLoader pointLoader;
-            string pointType;            
+            readonly PointLoader pointLoader;
+            readonly string pointType;            
         }
 
         class BGTurnContainer : GeometryLoader<ExpressionDrawer.TurnsContainer>
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.TurnsContainer; }
@@ -2938,8 +2847,7 @@ namespace GraphicalDebugging
                     if (containerLoader == null)
                         return null;
 
-                    string turnName, turnType;
-                    containerLoader.ElementInfo(name, type, out turnName, out turnType);
+                    containerLoader.ElementInfo(name, type, out string turnName, out string turnType);
 
                     // WARNING: Potentially recursive call, search for Turns only
                     BGTurn turnLoader = loaders.FindByType(ExpressionLoader.Kind.Turn,
@@ -2986,16 +2894,16 @@ namespace GraphicalDebugging
                      : null;
             }
 
-            ContainerLoader containerLoader;
-            BGTurn turnLoader;
-            string turnType;
+            readonly ContainerLoader containerLoader;
+            readonly BGTurn turnLoader;
+            readonly string turnType;
         }
 
         // TODO: This implementation is very similar to any MultiGeometry,
         //   including User-Defined ones, so if possible unify all of them
         class GeometryContainer : GeometryLoader<ExpressionDrawer.DrawablesContainer>
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.GeometriesContainer; }
@@ -3009,8 +2917,7 @@ namespace GraphicalDebugging
                     if (containerLoader == null)
                         return null;
 
-                    string geometryName, geometryType;
-                    containerLoader.ElementInfo(name, type, out geometryName, out geometryType);
+                    containerLoader.ElementInfo(name, type, out string geometryName, out string geometryType);
 
                     // WARNING: Potentially recursive call, search for Geometries only,
                     //   GeometryContainer cannot be treated as a Geometry in GeometryKindConstraint
@@ -3047,8 +2954,7 @@ namespace GraphicalDebugging
 
                 if  (mreader != null)
                 {
-                    string geometryName, dummyType;
-                    containerLoader.ElementInfo(name, type, out geometryName, out dummyType);
+                    containerLoader.ElementInfo(name, type, out string geometryName, out string _);
 
                     result = LoadMemory(mreader, debugger,
                                         name, type,
@@ -3128,14 +3034,14 @@ namespace GraphicalDebugging
                 return null;
             }
 
-            ContainerLoader containerLoader;
-            DrawableLoader geometryLoader;
-            string geometryType;
+            readonly ContainerLoader containerLoader;
+            readonly DrawableLoader geometryLoader;
+            readonly string geometryType;
         }
 
         class PointContainer : PointRange<ExpressionDrawer.MultiPoint>
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.MultiPoint; }
@@ -3148,8 +3054,7 @@ namespace GraphicalDebugging
                     if (containerLoader == null)
                         return null;
 
-                    string pointName, pointType;
-                    containerLoader.ElementInfo(name, type, out pointName, out pointType);
+                    containerLoader.ElementInfo(name, type, out string pointName, out string pointType);
 
                     // WARNING: Potentially recursive call, search for Points only
                     PointLoader pointLoader = loaders.FindByType(ExpressionLoader.Kind.Point,
@@ -3185,8 +3090,7 @@ namespace GraphicalDebugging
                 
                 if (mreader != null)
                 {
-                    string pointName, dummyType;
-                    containerLoader.ElementInfo(name, type, out pointName, out dummyType);
+                    containerLoader.ElementInfo(name, type, out string pointName, out string _);
 
                     result = LoadMemory(mreader, debugger,
                                         name, type,
@@ -3205,14 +3109,14 @@ namespace GraphicalDebugging
                 return result;
             }
 
-            ContainerLoader containerLoader;
-            PointLoader pointLoader;
-            string pointType;
+            readonly ContainerLoader containerLoader;
+            readonly PointLoader pointLoader;
+            readonly string pointType;
         }
 
         class ValuesContainer : LoaderR<ExpressionDrawer.ValuesContainer>
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.ValuesContainer; }
@@ -3228,8 +3132,7 @@ namespace GraphicalDebugging
                         return null;
 
                     // Element is not a Geometry
-                    string elName, elType;
-                    containerLoader.ElementInfo(name, type, out elName, out elType);
+                    containerLoader.ElementInfo(name, type, out string elName, out string elType);
 
                     // WARNING: Potentially recursive call, avoid searching for ValuesContainers
                     Loader l = loaders.FindByType(OnlyNonValues, elName, elType);
@@ -3285,10 +3188,10 @@ namespace GraphicalDebugging
             {
                 result = null;
 
-                string elemName, elemType;
-                loader.ElementInfo(name, type, out elemName, out elemType);
+                loader.ElementInfo(name, type, out string elemName, out string elemType);
 
-                int valSize = ExpressionParser.GetTypeSizeof(debugger, elemType);
+                if (!debugger.GetTypeSizeof(elemType, out int valSize))
+                    return;
 
                 MemoryReader.ValueConverter<double>
                     valueConverter = mreader.GetNumericConverter(elemType, valSize);
@@ -3317,8 +3220,7 @@ namespace GraphicalDebugging
                 List<double> values = new List<double>();
                 bool ok = loader.ForEachElement(debugger, name, delegate (string elName)
                 {
-                    double value = 0;
-                    if (! ExpressionParser.TryLoadDouble(debugger, elName, out value))
+                    if (!debugger.TryLoadDouble(elName, out double value))
                         return false;
                     values.Add(value);
                     return callback();
@@ -3328,7 +3230,7 @@ namespace GraphicalDebugging
                     result = values;
             }
 
-            ContainerLoader containerLoader;
+            readonly ContainerLoader containerLoader;
         }
 
         // This loader is created manually right now so LoaderCreator is not needed
@@ -3425,8 +3327,8 @@ namespace GraphicalDebugging
                 return result;
             }
 
-            ValuesContainer[] valueContainers;
-            Geometry.Traits traits;
+            readonly ValuesContainer[] valueContainers;
+            readonly Geometry.Traits traits;
         }
     }
 }

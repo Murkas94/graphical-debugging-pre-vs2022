@@ -19,8 +19,7 @@ using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Threading;
-using Task = System.Threading.Tasks.Task;
+
 
 namespace GraphicalDebugging
 {
@@ -96,8 +95,8 @@ namespace GraphicalDebugging
                     values.Add(value);
             }
             
-            private SortedSet<int> values;
-            private int max_count;
+            readonly SortedSet<int> values;
+            readonly int max_count;
         }
 
         public static string TypeId(string type)
@@ -239,9 +238,11 @@ namespace GraphicalDebugging
                  : "";
         }
 
-        public static void ShowWindow<WatchWindow>(Package package, string name)
+        public static void ShowWindow<WatchWindow>(AsyncPackage package, string name)
             where WatchWindow : ToolWindowPane
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
             for (int i = 0; i < 10; ++i)
             {
                 ToolWindowPane window = package.FindToolWindow(typeof(WatchWindow), i, false);
@@ -299,11 +300,10 @@ namespace GraphicalDebugging
         public static T GetDialogPage<T>()
             where T : DialogPage
         {
-            GraphicalWatchPackage package = GraphicalWatchPackage.Instance;
-            if (package == null)
-                return default(T);
-
-            return (T)package.GetDialogPage(typeof(T));
+            GraphicalDebuggingPackage package = GraphicalDebuggingPackage.Instance;
+            return package != null
+                 ? (T)package.GetDialogPage(typeof(T))
+                 : default;
         }
 
         public static string ToString(double v)
@@ -539,28 +539,11 @@ namespace GraphicalDebugging
             return val.Length > 1 /*&& val[0] == '0'*/ && val[1] == 'x';
         }
 
-        public static ulong ParseULong(string val)
-        {
-            return ParseULong(val, IsHex(val));
-        }
-
-        public static ulong ParseULong(string val, bool isHex)
+        public static bool TryParseULong(string val, out ulong result)
         {
             return IsHex(val)
-                 ? ulong.Parse(val.Substring(2), NumberStyles.HexNumber)
-                 : ulong.Parse(val);
-        }
-
-        public static int ParseInt(string val)
-        {
-            return ParseInt(val, IsHex(val));
-        }
-
-        public static int ParseInt(string val, bool isHex)
-        {
-            return isHex
-                 ? int.Parse(val.Substring(2), NumberStyles.HexNumber)
-                 : int.Parse(val);
+                 ? ulong.TryParse(val.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out result)
+                 : ulong.TryParse(val, out result);
         }
 
         public static bool TryParseInt(string val, out int result)
@@ -575,34 +558,34 @@ namespace GraphicalDebugging
                  : int.TryParse(val, out result);
         }
 
-        public static double ParseDouble(string s)
+        public static bool TryParseDouble(string s, out double result)
         {
-            return double.Parse(s, CultureInfo.InvariantCulture);
+            return double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out result);
         }
 
-        // class -> v != null
-        // bool  -> v != false
+// class -> v != null
+// bool  -> v != false
         public static bool IsOk<T1>(T1 v1)
         {
-            return !EqualityComparer<T1>.Default.Equals(v1, default(T1));
+            return !EqualityComparer<T1>.Default.Equals(v1, default);
         }
         public static bool IsOk<T1, T2>(T1 v1, T2 v2)
         {
-            return !EqualityComparer<T1>.Default.Equals(v1, default(T1))
-                && !EqualityComparer<T2>.Default.Equals(v2, default(T2));
+            return !EqualityComparer<T1>.Default.Equals(v1, default)
+                && !EqualityComparer<T2>.Default.Equals(v2, default);
         }
         public static bool IsOk<T1, T2, T3>(T1 v1, T2 v2, T3 v3)
         {
-            return !EqualityComparer<T1>.Default.Equals(v1, default(T1))
-                && !EqualityComparer<T2>.Default.Equals(v2, default(T2))
-                && !EqualityComparer<T3>.Default.Equals(v3, default(T3));
+            return !EqualityComparer<T1>.Default.Equals(v1, default)
+                && !EqualityComparer<T2>.Default.Equals(v2, default)
+                && !EqualityComparer<T3>.Default.Equals(v3, default);
         }
         public static bool IsOk<T1, T2, T3, T4>(T1 v1, T2 v2, T3 v3, T4 v4)
         {
-            return !EqualityComparer<T1>.Default.Equals(v1, default(T1))
-                && !EqualityComparer<T2>.Default.Equals(v2, default(T2))
-                && !EqualityComparer<T3>.Default.Equals(v3, default(T3))
-                && !EqualityComparer<T4>.Default.Equals(v4, default(T4));
+            return !EqualityComparer<T1>.Default.Equals(v1, default)
+                && !EqualityComparer<T2>.Default.Equals(v2, default)
+                && !EqualityComparer<T3>.Default.Equals(v3, default)
+                && !EqualityComparer<T4>.Default.Equals(v4, default);
         }
 
         public static bool Assign<T>(ref T v, T v2)

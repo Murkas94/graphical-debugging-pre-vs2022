@@ -37,8 +37,10 @@ namespace GraphicalDebugging
                         IntPtr mainWindowHandle = Util.GetWindowHandle(System.Windows.Application.Current.MainWindow);
                         System.Threading.Thread thread = new System.Threading.Thread(() =>
                         {
-                            LoadingWindow w = new LoadingWindow();
-                            w.Title = "Loading takes much time.";
+                            LoadingWindow w = new LoadingWindow
+                            {
+                                Title = "Loading takes much time."
+                            };
                             w.Show();
                             w.Closed += (sender2, e2) => w.Dispatcher.InvokeShutdown();
                             IntPtr wHandle = Util.GetWindowHandle(w);
@@ -100,28 +102,24 @@ namespace GraphicalDebugging
                 window = null;
             }
 
-            string variableName;
-            long timeThreshold;
-            string messagePrefix;
-            string messagePostfix;
+            readonly string variableName;
+            readonly long timeThreshold;
+            readonly string messagePrefix;
+            readonly string messagePostfix;
 
             bool windowCreated = false;
             LoadingWindow window = null;
 
-            System.Diagnostics.Stopwatch stopWatch = new System.Diagnostics.Stopwatch();
+            readonly System.Diagnostics.Stopwatch stopWatch = new System.Diagnostics.Stopwatch();
         }
 
         class TypeInfo
         {
             public TypeInfo(Debugger debugger, string name)
             {
-                Type = ExpressionParser.GetValueType(debugger, name);
-                if (Type == null)
-                    return;
-                Size = ExpressionParser.GetTypeSizeof(debugger, Type);
-                if (Size <= 0)
-                    return;
-                IsValid = true;
+                Type = debugger.GetValueType(name);
+                IsValid = Type != null
+                      && debugger.GetTypeSizeof(Type, out Size);
             }
 
             public string Type = null;
@@ -134,11 +132,8 @@ namespace GraphicalDebugging
             public MemberInfo(Debugger debugger, string baseName, string memberName)
                 : base(debugger, memberName)
             {
-                if (!IsValid)
-                    return;
-                Offset = ExpressionParser.GetAddressDifference(debugger, baseName, memberName);
-                if (ExpressionParser.IsInvalidAddressDifference(Offset))
-                    IsValid = false;
+                IsValid = IsValid
+                       && debugger.GetAddressOffset(baseName, memberName, out Offset);
             }
 
             public long Offset;
@@ -149,12 +144,8 @@ namespace GraphicalDebugging
             public VariableInfo(Debugger debugger, string name)
                 : base(debugger, name)
             {
-                if (base.IsValid)
-                {
-                    Address = ExpressionParser.GetValueAddress(debugger, name);
-                    if (Address == 0)
-                        base.IsValid = false;
-                }
+                IsValid = IsValid
+                       && debugger.GetValueAddress(name, out Address);
             }
 
             public ulong Address;
@@ -182,7 +173,7 @@ namespace GraphicalDebugging
                 return id == this.id;
             }
 
-            string id;
+            readonly string id;
         }
 
         class TypeMatcher : ITypeMatcher
@@ -194,7 +185,7 @@ namespace GraphicalDebugging
                 return type == this.type;
             }
 
-            string type;
+            readonly string type;
         }
 
         class TypePatternMatcher : ITypeMatcher
@@ -236,8 +227,8 @@ namespace GraphicalDebugging
                 return result;
             }
 
-            string pattern;
-            Regex regex;
+            readonly string pattern;
+            readonly Regex regex;
         }
 
         static string StdContainerType(string containerId, string elementType, string allocatorId)

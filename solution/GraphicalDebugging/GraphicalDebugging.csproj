@@ -74,7 +74,6 @@
     <Compile Include="ExpressionLoader_BoostGil.cs" />
     <Compile Include="ExpressionLoader.cs" />
     <Compile Include="ExpressionLoader_Util.cs" />
-    <Compile Include="ExpressionParser.cs" />
     <Compile Include="GeneralOptionControl.cs">
       <SubType>UserControl</SubType>
     </Compile>
@@ -101,7 +100,7 @@
     <Compile Include="GraphicalWatchOptionPage.cs">
       <SubType>Component</SubType>
     </Compile>
-    <Compile Include="GraphicalWatchPackage.cs" />
+    <Compile Include="GraphicalDebuggingPackage.cs" />
     <Compile Include="LoadingWindow.xaml.cs">
       <DependentUpon>LoadingWindow.xaml</DependentUpon>
     </Compile>
@@ -118,7 +117,7 @@
     <Compile Include="Util.cs" />
     <Compile Include="VariableItem.cs" />
     <Compile Include="Viewport.cs" />
-    <Compile Include="Wrappers.cs" />
+    <Compile Include="Debugger.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config">
@@ -150,7 +149,7 @@
     </Content>
     <Content Include="Resources\plot.ico" />
     <Content Include="Resources\PlotWatchCommand.png" />
-    <VSCTCompile Include="GraphicalWatchPackage.vsct">
+    <VSCTCompile Include="GraphicalDebuggingPackage.vsct">
       <ResourceName>Menus.ctmenu</ResourceName>
     </VSCTCompile>
     <Content Include="BoostArray.natvis">

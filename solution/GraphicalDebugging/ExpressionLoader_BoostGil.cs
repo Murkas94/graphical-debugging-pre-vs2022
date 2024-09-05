@@ -21,7 +21,7 @@ namespace GraphicalDebugging
     {
         class BoostGilImage : LoaderR<ExpressionDrawer.Image>
         {
-            public class LoaderCreator : ExpressionLoader.LoaderCreator
+            public class LoaderCreator : ExpressionLoader.ILoaderCreator
             {
                 public bool IsUserDefined() { return false; }
                 public Kind Kind() { return ExpressionLoader.Kind.Image; }
@@ -49,13 +49,12 @@ namespace GraphicalDebugging
                 // memory random size could be loaded here. Then also the memory probably points
                 // to some random place in memory (maybe protected?) so the result will probably
                 // be another exception which is fine or an image containing noise from memory.
-                int width = ExpressionParser.LoadSize(debugger, name + "._view._dimensions.x");
-                int height = ExpressionParser.LoadSize(debugger, name + "._view._dimensions.y");
-                if (width < 1 || height < 1)
+                if (!debugger.TryLoadUInt(name + "._view._dimensions.x", out int width)
+                 || !debugger.TryLoadUInt(name + "._view._dimensions.y", out int height)
+                 || width < 1 || height < 1)
                     return null;
 
-                string pixelType, isPlanarStr;
-                if (! Util.Tparams(type, out pixelType, out isPlanarStr))
+                if (! Util.Tparams(type, out string pixelType, out string isPlanarStr))
                     return null;
 
                 string pixelId = Util.TypeId(pixelType);
@@ -64,25 +63,21 @@ namespace GraphicalDebugging
 
                 bool isPlanar = (isPlanarStr == "1");
 
-                string channelValueType, layoutType;
-                if (! Util.Tparams(pixelType, out channelValueType, out layoutType))
+                if (! Util.Tparams(pixelType, out string channelValueType, out string layoutType))
                     return null;
 
                 string layoutId = Util.TypeId(layoutType);
                 if (layoutId != "boost::gil::layout")
                     return null;
 
-                string colorSpaceType, channelMappingType;
-                if (! Util.Tparams(layoutType, out colorSpaceType, out channelMappingType))
+                if (! Util.Tparams(layoutType, out string colorSpaceType, out string channelMappingType))
                     return null;
 
-                ChannelValueKind channelValueKind = ChannelValueKind.Unknown;
-                int channelValueSize = 0;
-                ParseChannelValue(debugger, channelValueType, out channelValueKind, out channelValueSize);
+                ParseChannelValue(debugger, channelValueType, out ChannelValueKind channelValueKind, out int channelValueSize);
                 if (channelValueKind == ChannelValueKind.Unknown || channelValueSize == 0)
                     return null;
 
-                string colorSpaceId = Util.TypeId(colorSpaceType);
+                //string colorSpaceId = Util.TypeId(colorSpaceType);
                 ColorSpace colorSpace = ParseColorSpace(colorSpaceType);
                 int colorSpaceSize = ColorSpaceSize(colorSpace);
 
@@ -106,8 +101,7 @@ namespace GraphicalDebugging
                 bool isLoaded = false;
                 if (mreader != null)
                 {
-                    ulong address = ExpressionParser.GetValueAddress(debugger, name + "._memory[0]");
-                    if (address == 0)
+                     if (!debugger.GetValueAddress(name + "._memory[0]", out ulong address))
                         return null;
 
                     isLoaded = mreader.ReadBytes(address, memory);
@@ -169,8 +163,7 @@ namespace GraphicalDebugging
                                            out int channelValueSize)
             {
                 channelValueKind = ChannelValueKind.Unknown;
-                channelValueSize = 0;
-
+                
                 string rawType = type;
 
                 if (type == "unsigned char"
@@ -214,24 +207,16 @@ namespace GraphicalDebugging
                     }
                 }
 
-                channelValueSize = channelValueKind != ChannelValueKind.Unknown
-                                 ? GetSizeOfType(debugger, rawType)
-                                 : 0;
+                channelValueSize = 0;
+                if (channelValueKind != ChannelValueKind.Unknown)
+                    debugger.GetCppSizeof(rawType, out channelValueSize);
             }
 
-            private int GetSizeOfType(Debugger debugger, string type)
-            {
-                Expression sizeExpr = debugger.GetExpression("sizeof(" + type + ")");
-                return sizeExpr.IsValidValue
-                     ? Util.ParseInt(sizeExpr.Value, debugger.HexDisplayMode)
-                     : 0;
-            }
-            
             enum ColorSpace { Unknown, Rgb, Rgba, Cmyk, Gray, GrayAlpha };
 
             ColorSpace ParseColorSpace(string colorSpaceType)
             {
-                string colorSpaceId = Util.TypeId(colorSpaceType);
+                //string colorSpaceId = Util.TypeId(colorSpaceType);
                 List<string> tparams = Util.Tparams(colorSpaceType);
                 // NOTE: Do not check the Util.BaseType(colorSpaceType)
                 //  to avoid checking all MPL and MP11 vectors and lists

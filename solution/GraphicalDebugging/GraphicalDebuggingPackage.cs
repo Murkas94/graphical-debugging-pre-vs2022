@@ -1,5 +1,5 @@
 ﻿//------------------------------------------------------------------------------
-// <copyright file="GraphicalWatchPackage.cs">
+// <copyright file="GraphicalDebuggingPackage.cs">
 //     Copyright (c) Adam Wulkiewicz.
 // </copyright>
 //------------------------------------------------------------------------------
@@ -30,11 +30,10 @@ namespace GraphicalDebugging
     /// To get loaded into VS, the package must be referred by &lt;Asset Type="Microsoft.VisualStudio.VsPackage" ...&gt; in .vsixmanifest file.
     /// </para>
     /// </remarks>
-    [PackageRegistration(UseManagedResourcesOnly = true)]
+    [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
     [InstalledProductRegistration("#110", "#112", "1.0", IconResourceID = 400)] // Info on this package for Help/About
     [ProvideMenuResource("Menus.ctmenu", 1)]
-    [Guid(GraphicalWatchPackage.PackageGuidString)]
-    [SuppressMessage("StyleCop.CSharp.DocumentationRules", "SA1650:ElementDocumentationMustBeSpelledCorrectly", Justification = "pkgdef, VS and vsixmanifest are valid VS terms")]
+    [Guid(GraphicalDebuggingPackage.PackageGuidString)]
     [ProvideToolWindow(typeof(GeometryWatch), MultiInstances = true)]
     [ProvideToolWindow(typeof(GraphicalWatch), MultiInstances = true)]
     [ProvideToolWindow(typeof(PlotWatch), MultiInstances = true)]
@@ -42,22 +41,22 @@ namespace GraphicalDebugging
     [ProvideOptionPage(typeof(GeometryWatchOptionPage), "Graphical Debugging", "Geometry Watch", 0, 0, true)]
     [ProvideOptionPage(typeof(GraphicalWatchOptionPage), "Graphical Debugging", "Graphical Watch", 0, 0, true)]
     [ProvideOptionPage(typeof(PlotWatchOptionPage), "Graphical Debugging", "Plot Watch", 0, 0, true)]
-    public sealed class GraphicalWatchPackage : Package
+    public sealed class GraphicalDebuggingPackage : AsyncPackage
     {
         /// <summary>
-        /// GraphicalWatchPackage GUID string.
+        /// GraphicalDebuggingPackage GUID string.
         /// </summary>
         public const string PackageGuidString = "f63e15c7-29b1-420d-94a9-8b28e516c170";
 
         /// <summary>
-        /// GraphicalWatchPackage Instance set during initialization of the package.
+        /// GraphicalDebuggingPackage Instance set during initialization of the package.
         /// </summary>
-        public static GraphicalWatchPackage Instance { get; private set; }
+        public static GraphicalDebuggingPackage Instance { get; private set; }
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="GraphicalWatch"/> class.
+        /// Initializes a new instance of the <see cref="GraphicalDebuggingPackage"/> class.
         /// </summary>
-        public GraphicalWatchPackage()
+        public GraphicalDebuggingPackage()
         {
             // Inside this method you can place any initialization code that does not require
             // any Visual Studio service because at this point the package object is created but
@@ -71,22 +70,19 @@ namespace GraphicalDebugging
         /// Initialization of the package; this method is called right after the package is sited, so this is the place
         /// where you can put all the initialization code that rely on services provided by VisualStudio.
         /// </summary>
-        protected override void Initialize()
+        protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
+            // When initialized asynchronously, the current thread may be a background thread at this point.
+            // Do any initialization that requires the UI thread after switching to the UI thread.
+            await this.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+
             Instance = this;
 
-            base.Initialize();
+            await ExpressionLoader.InitializeAsync(this);
 
-            ExpressionLoader.Initialize(this);
-
-            GeometryWatchCommand.Initialize(this);
-            GraphicalWatchCommand.Initialize(this);
-            PlotWatchCommand.Initialize(this);
-        }
-
-        public new object GetService(Type serviceType)
-        {
-            return base.GetService(serviceType);
+            await GeometryWatchCommand.InitializeAsync(this);
+            await GraphicalWatchCommand.InitializeAsync(this);
+            await PlotWatchCommand.InitializeAsync(this);
         }
 
         public new DialogPage GetDialogPage(Type dialogPageType)
