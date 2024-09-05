@@ -1,4 +1,5 @@
 ﻿using EnvDTE;
+using EnvDTE80;
 using Microsoft.VisualStudio.Debugger.ComponentInterfaces;
 using System;
 using System.Windows.Forms;
@@ -15,7 +16,7 @@ namespace GraphicalDebugging
 
     class Debugger
     {
-        public Debugger(DTE dte)
+        public Debugger(DTE2 dte)
         {
             this.debugger = dte.Debugger;
         }

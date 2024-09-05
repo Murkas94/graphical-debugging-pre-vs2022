@@ -7,6 +7,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 
 namespace GraphicalDebugging
 {
@@ -79,7 +80,7 @@ namespace GraphicalDebugging
 
             public bool Equals(Point other)
             {
-                return coords.AsSpan().SequenceEqual(other.coords);
+                return Enumerable.SequenceEqual(coords, other.coords);
             }
 
             public Point Clone()
